@@ -30,6 +30,17 @@ export const editorModeEnum = pgEnum("editor_mode", [
   "javascript",
 ]);
 
+export const sessionStatusEnum = pgEnum("session_status", [
+  "active",
+  "ended",
+]);
+
+export const participantStatusEnum = pgEnum("participant_status", [
+  "active",
+  "idle",
+  "needs_help",
+]);
+
 // --- Tables ---
 
 export const schools = pgTable("schools", {
@@ -113,5 +124,48 @@ export const classroomMembers = pgTable(
       table.classroomId,
       table.userId
     ),
+  ]
+);
+
+export const liveSessions = pgTable(
+  "live_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classroomId: uuid("classroom_id")
+      .notNull()
+      .references(() => classrooms.id, { onDelete: "cascade" }),
+    teacherId: uuid("teacher_id")
+      .notNull()
+      .references(() => users.id),
+    status: sessionStatusEnum("status").notNull().default("active"),
+    settings: jsonb("settings").default({}),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    endedAt: timestamp("ended_at"),
+  },
+  (table) => [
+    index("live_sessions_classroom_idx").on(table.classroomId),
+    index("live_sessions_status_idx").on(table.classroomId, table.status),
+  ]
+);
+
+export const sessionParticipants = pgTable(
+  "session_participants",
+  {
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => liveSessions.id, { onDelete: "cascade" }),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: participantStatusEnum("status").notNull().default("active"),
+    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    leftAt: timestamp("left_at"),
+  },
+  (table) => [
+    uniqueIndex("session_participant_unique_idx").on(
+      table.sessionId,
+      table.studentId
+    ),
+    index("session_participants_session_idx").on(table.sessionId),
   ]
 );

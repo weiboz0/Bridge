@@ -9,11 +9,29 @@ const testClient = postgres(
 export const testDb = drizzle(testClient, { schema });
 
 export async function cleanupDatabase() {
+  await testDb.delete(schema.sessionParticipants);
+  await testDb.delete(schema.liveSessions);
   await testDb.delete(schema.classroomMembers);
   await testDb.delete(schema.classrooms);
   await testDb.delete(schema.authProviders);
   await testDb.delete(schema.users);
   await testDb.delete(schema.schools);
+}
+
+export async function createTestSession(
+  classroomId: string,
+  teacherId: string,
+  overrides: Partial<typeof schema.liveSessions.$inferInsert> = {}
+) {
+  const [session] = await testDb
+    .insert(schema.liveSessions)
+    .values({
+      classroomId,
+      teacherId,
+      ...overrides,
+    })
+    .returning();
+  return session;
 }
 
 export async function createTestSchool(overrides: Partial<typeof schema.schools.$inferInsert> = {}) {
