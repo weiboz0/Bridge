@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 
 export default async function Home() {
   const session = await auth();
@@ -17,12 +17,12 @@ export default async function Home() {
         A live-first coding education platform for K-12 classrooms
       </p>
       <div className="flex gap-4">
-        <Button asChild>
-          <Link href="/login">Log In</Link>
-        </Button>
-        <Button variant="outline" asChild>
-          <Link href="/register">Sign Up</Link>
-        </Button>
+        <Link href="/login" className={buttonVariants()}>
+          Log In
+        </Link>
+        <Link href="/register" className={buttonVariants({ variant: "outline" })}>
+          Sign Up
+        </Link>
       </div>
     </main>
   );
