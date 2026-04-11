@@ -19,6 +19,12 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Only owner or platform admin can view content
+  // Teacher/parent access will be refined with class membership checks in portal routes
+  if (doc.ownerId !== session.user.id && !session.user.isPlatformAdmin) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
   // Return plain text only (for parent viewing, search, etc.)
   return NextResponse.json({
     id: doc.id,

@@ -4,6 +4,7 @@ import { loadDocumentState, storeDocumentState } from "./documents";
 
 const server = new Server({
   port: 4000,
+  debounce: 30000, // Save to DB every 30 seconds (also saves on disconnect)
 
   async onAuthenticate({ token, documentName }: { token: string; documentName: string }) {
     if (!token) {

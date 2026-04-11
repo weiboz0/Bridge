@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -10,6 +10,7 @@ import {
 import { serverDb } from "./db";
 
 // Minimal table definition for server/ context (can't use @/ aliases)
+// Keep in sync with src/lib/db/schema.ts documents table
 const programmingLanguageEnum = pgEnum("programming_language", [
   "python",
   "javascript",
@@ -68,28 +69,11 @@ export async function storeDocumentState(
   const sessionId = parts[1];
   const userId = parts[3];
 
-  // Upsert: update if exists, insert if not
-  const [existing] = await serverDb
-    .select({ id: documents.id })
-    .from(documents)
-    .where(
-      and(
-        eq(documents.ownerId, userId),
-        eq(documents.sessionId, sessionId)
-      )
-    );
-
-  if (existing) {
-    await serverDb
-      .update(documents)
-      .set({ yjsState, plainText, updatedAt: new Date() })
-      .where(eq(documents.id, existing.id));
-  } else {
-    await serverDb.insert(documents).values({
-      ownerId: userId,
-      sessionId,
-      yjsState,
-      plainText,
-    });
-  }
+  // Atomic upsert using raw SQL to avoid race conditions
+  await serverDb.execute(sql`
+    INSERT INTO documents (id, owner_id, session_id, yjs_state, plain_text, created_at, updated_at)
+    VALUES (gen_random_uuid(), ${userId}, ${sessionId}, ${yjsState}, ${plainText}, now(), now())
+    ON CONFLICT (owner_id, session_id) WHERE session_id IS NOT NULL
+    DO UPDATE SET yjs_state = ${yjsState}, plain_text = ${plainText}, updated_at = now()
+  `);
 }

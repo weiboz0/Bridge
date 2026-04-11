@@ -19,5 +19,10 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Only owner or platform admin can view full document
+  if (doc.ownerId !== session.user.id && !session.user.isPlatformAdmin) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
   return NextResponse.json(doc);
 }
