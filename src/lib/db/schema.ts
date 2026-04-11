@@ -425,3 +425,28 @@ export const sessionTopics = pgTable(
     uniqueIndex("session_topic_unique_idx").on(table.sessionId, table.topicId),
   ]
 );
+
+// --- Documents ---
+
+export const documents = pgTable(
+  "documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    classroomId: uuid("classroom_id"),
+    sessionId: uuid("session_id"),
+    topicId: uuid("topic_id"),
+    language: programmingLanguageEnum("language").notNull().default("python"),
+    yjsState: text("yjs_state"),
+    plainText: text("plain_text").default(""),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("documents_owner_idx").on(table.ownerId),
+    index("documents_classroom_idx").on(table.classroomId),
+    index("documents_session_idx").on(table.sessionId),
+  ]
+);
