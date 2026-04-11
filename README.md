@@ -86,12 +86,26 @@ The app will be available at `http://localhost:3000`.
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (unit + integration)
 DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test
 
 # Run tests in watch mode
 DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test:watch
+
+# Run only unit tests
+DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test tests/unit/
+
+# Run only integration tests
+DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test tests/integration/
+
+# Run a specific test file
+DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test tests/integration/sessions-api.test.ts
 ```
+
+**Test structure:**
+- `tests/unit/` — Unit tests (schema, utilities, guardrails, component rendering)
+- `tests/api/` — Database integration tests (business logic with real Postgres)
+- `tests/integration/` — API integration tests (route handlers with mocked auth + real DB)
 
 ### Available Scripts
 
@@ -124,10 +138,12 @@ bridge/
 │   │   └── utils.ts            # Shared utilities
 │   └── types/                  # TypeScript type augmentations
 ├── tests/                      # Vitest test suites
-│   ├── unit/                   # Unit tests
-│   └── api/                    # Integration tests
+│   ├── unit/                   # Unit tests (schema, utils, guardrails, components)
+│   ├── api/                    # Database integration tests (business logic)
+│   └── integration/            # API integration tests (route handlers end-to-end)
+├── server/                     # Hocuspocus WebSocket server (sidecar)
 ├── drizzle/                    # Database migrations
-└── docs/                       # Design specs and plans
+└── docs/                       # Design specs, plans, and workflow docs
 ```
 
 ## Architecture
