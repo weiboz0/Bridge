@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { CodeEditor } from "@/components/editor/code-editor";
@@ -18,6 +18,7 @@ export default function StudentSessionPage() {
   const [code, setCode] = useState("");
   const [aiEnabled, setAiEnabled] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  const [broadcastActive, setBroadcastActive] = useState(false);
   const { ready, running, output, runCode, clearOutput } = usePyodide();
 
   const userId = session?.user?.id || "";
@@ -29,9 +30,43 @@ export default function StudentSessionPage() {
     token,
   });
 
-  // Listen for AI toggle events via SSE
-  // (In production, this would come from the SSE event bus)
-  // For now, we poll or listen for ai_toggled events
+  // Broadcast document (read-only view of teacher's code)
+  const broadcastDocName = `broadcast:${params.sessionId}`;
+  const { yText: broadcastYText, provider: broadcastProvider } = useYjsProvider({
+    documentName: broadcastActive ? broadcastDocName : "noop",
+    token,
+  });
+
+  // Listen for SSE events (AI toggle, broadcast, session end)
+  useEffect(() => {
+    const eventSource = new EventSource(
+      `/api/sessions/${params.sessionId}/events`
+    );
+
+    eventSource.addEventListener("ai_toggled", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.studentId === userId) {
+        setAiEnabled(data.enabled);
+        if (data.enabled && !showAi) {
+          setShowAi(true);
+        }
+      }
+    });
+
+    eventSource.addEventListener("broadcast_started", () => {
+      setBroadcastActive(true);
+    });
+
+    eventSource.addEventListener("broadcast_ended", () => {
+      setBroadcastActive(false);
+    });
+
+    eventSource.addEventListener("session_ended", () => {
+      window.location.href = `/dashboard/classrooms/${params.id}`;
+    });
+
+    return () => eventSource.close();
+  }, [params.sessionId, params.id, userId, showAi]);
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)]">
@@ -49,13 +84,15 @@ export default function StudentSessionPage() {
           </div>
           <div className="flex gap-2">
             <RaiseHandButton sessionId={params.sessionId} />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowAi(!showAi)}
-            >
-              {showAi ? "Hide AI" : "Ask AI"}
-            </Button>
+            {aiEnabled && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowAi(!showAi)}
+              >
+                {showAi ? "Hide AI" : "Ask AI"}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -74,6 +111,17 @@ export default function StudentSessionPage() {
             />
           </div>
         </div>
+
+        {broadcastActive && (
+          <div className="mx-4 mb-2 border rounded-lg overflow-hidden">
+            <div className="bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 border-b">
+              Teacher is broadcasting
+            </div>
+            <div className="h-40">
+              <CodeEditor yText={broadcastYText} provider={broadcastProvider} readOnly />
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 min-h-0 px-4">
           <CodeEditor

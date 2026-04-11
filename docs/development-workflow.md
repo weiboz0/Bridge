@@ -17,7 +17,10 @@ Explore the problem space before committing to an approach.
 3. Brainstorm approaches. Compare trade-offs. Identify risks.
 4. Get user alignment on the approach before writing a plan.
 
-**Output:** Design spec in `docs/superpowers/specs/` (for non-trivial designs), or verbal alignment for simpler work.
+**Output:** One of the following, depending on complexity:
+- **Verbal alignment** — for simple, well-defined tasks. Proceed directly to Plan.
+- **Straight to plan** — when brainstorming produces a concrete design (components, file lists, phases, testing strategy). No spec needed.
+- **Design spec** in `docs/superpowers/specs/` — only for large, novel, or cross-cutting designs that will be referenced by multiple plans or need a standalone reference document.
 
 **Skip when:** The task is well-defined with an obvious approach (e.g., "add field X to endpoint Y").
 

@@ -21,14 +21,14 @@ Outstanding tasks and technical debt. Check this file when planning new work.
 - [ ] **Hocuspocus persistence** — Currently in-memory only; add PostgreSQL persistence for Yjs documents
 - [ ] **Reconnection handling** — Handle WebSocket disconnects gracefully with auto-reconnect and user notification
 - [ ] **Student tile optimization** — Each StudentTile creates its own Hocuspocus provider; may not scale to 30+ students
-- [ ] **Broadcast mode** — Teacher live code broadcast UI not yet implemented (infrastructure ready)
+- [x] ~~**Broadcast mode** — Teacher live code broadcast with Yjs broadcast document~~
 
 ## AI
 
-- [ ] **AI toggle SSE integration** — Student doesn't receive real-time notification when teacher toggles AI; currently requires page refresh
+- [x] ~~**AI toggle SSE integration** — Student receives real-time SSE notification when teacher toggles AI~~
 - [ ] **AI rate limiting** — No per-student rate limit on AI interactions yet
-- [ ] **Annotation UI** — CodeMirror gutter markers and annotation popover not yet implemented (API ready)
-- [ ] **AI activity feed** — Teacher view of all AI interactions not yet implemented (API ready)
+- [x] ~~**Annotation UI** — Annotation form + list in teacher collaborative editing sidebar~~
+- [x] ~~**AI activity feed** — Teacher dashboard sidebar shows AI interaction summaries~~
 
 ## Phase 2 (Post-MVP)
 

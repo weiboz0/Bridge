@@ -7,6 +7,7 @@ import { python } from "@codemirror/lang-python";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
+import { AiToggleButton } from "@/components/ai/ai-toggle-button";
 
 interface StudentTileProps {
   sessionId: string;
@@ -83,7 +84,10 @@ export function StudentTile({
     >
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium truncate">{studentName}</span>
-        <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+        <div className="flex items-center gap-1">
+          <AiToggleButton sessionId={sessionId} studentId={studentId} />
+          <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+        </div>
       </div>
       <div ref={containerRef} className="h-24 overflow-hidden rounded" />
     </div>
