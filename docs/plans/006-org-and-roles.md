@@ -8,7 +8,7 @@
 
 **Tech Stack:** Drizzle ORM (pgTable, pgEnum), Next.js API routes, Zod v4 validation, Auth.js v5 (JWT callbacks), Vitest, bcryptjs
 
-**Spec:** `docs/superpowers/specs/002-platform-redesign.md` (Sub-project 1)
+**Spec:** `docs/specs/002-platform-redesign.md` (Sub-project 1)
 
 **Depends on:** Plans 001-005 (MVP complete)
 
