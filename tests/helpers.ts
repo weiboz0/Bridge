@@ -9,6 +9,8 @@ const testClient = postgres(
 export const testDb = drizzle(testClient, { schema });
 
 export async function cleanupDatabase() {
+  await testDb.delete(schema.codeAnnotations);
+  await testDb.delete(schema.aiInteractions);
   await testDb.delete(schema.sessionParticipants);
   await testDb.delete(schema.liveSessions);
   await testDb.delete(schema.classroomMembers);

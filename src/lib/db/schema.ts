@@ -41,6 +41,11 @@ export const participantStatusEnum = pgEnum("participant_status", [
   "needs_help",
 ]);
 
+export const annotationAuthorTypeEnum = pgEnum("annotation_author_type", [
+  "teacher",
+  "ai",
+]);
+
 // --- Tables ---
 
 export const schools = pgTable("schools", {
@@ -167,5 +172,47 @@ export const sessionParticipants = pgTable(
       table.studentId
     ),
     index("session_participants_session_idx").on(table.sessionId),
+  ]
+);
+
+export const aiInteractions = pgTable(
+  "ai_interactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => liveSessions.id, { onDelete: "cascade" }),
+    enabledByTeacherId: uuid("enabled_by_teacher_id")
+      .notNull()
+      .references(() => users.id),
+    messages: jsonb("messages").default([]).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ai_interactions_session_idx").on(table.sessionId),
+    index("ai_interactions_student_idx").on(table.studentId, table.sessionId),
+  ]
+);
+
+export const codeAnnotations = pgTable(
+  "code_annotations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    documentId: varchar("document_id", { length: 255 }).notNull(),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    authorType: annotationAuthorTypeEnum("author_type").notNull(),
+    lineStart: varchar("line_start", { length: 10 }).notNull(),
+    lineEnd: varchar("line_end", { length: 10 }).notNull(),
+    content: text("content").notNull(),
+    resolved: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("code_annotations_document_idx").on(table.documentId),
   ]
 );

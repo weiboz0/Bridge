@@ -15,6 +15,13 @@
       "when": 1775862800628,
       "tag": "0001_eminent_loa",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775865401147,
+      "tag": "0002_pretty_beast",
+      "breakpoints": true
     }
   ]
 }

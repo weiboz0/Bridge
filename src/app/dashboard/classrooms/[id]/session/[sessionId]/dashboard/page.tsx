@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { StudentGrid } from "@/components/session/student-grid";
 import { CodeEditor } from "@/components/editor/code-editor";
+import { HelpQueuePanel } from "@/components/help-queue/help-queue-panel";
+import { AiToggleButton } from "@/components/ai/ai-toggle-button";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { Button } from "@/components/ui/button";
 
@@ -119,12 +121,19 @@ export default function TeacherDashboardPage() {
         </Button>
       </div>
 
-      <StudentGrid
-        sessionId={params.sessionId}
-        participants={participants}
-        token={token}
-        onSelectStudent={setSelectedStudent}
-      />
+      <div className="flex gap-4">
+        <div className="flex-1">
+          <StudentGrid
+            sessionId={params.sessionId}
+            participants={participants}
+            token={token}
+            onSelectStudent={setSelectedStudent}
+          />
+        </div>
+        <div className="w-64 space-y-4">
+          <HelpQueuePanel sessionId={params.sessionId} />
+        </div>
+      </div>
     </div>
   );
 }
