@@ -92,7 +92,6 @@ export async function getClassroomMembers(db: Database, classroomId: string) {
       joinedAt: classroomMembers.joinedAt,
       name: users.name,
       email: users.email,
-      role: users.role,
     })
     .from(classroomMembers)
     .innerJoin(users, eq(classroomMembers.userId, users.id))
