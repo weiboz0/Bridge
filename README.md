@@ -66,11 +66,12 @@ createdb bridge_test
 bun run db:generate
 bun run db:migrate
 
-# Start development server
-bun run dev
+# Start development server (two terminals needed)
+bun run dev          # Terminal 1: Next.js app
+bun run hocuspocus   # Terminal 2: Yjs WebSocket server for real-time collaboration
 ```
 
-The app will be available at `http://localhost:3000`.
+The app will be available at `http://localhost:3000`. The Hocuspocus WebSocket server runs on port 4000.
 
 ### Environment Variables
 
@@ -82,6 +83,11 @@ The app will be available at `http://localhost:3000`.
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `REDIS_URL` | Redis connection string |
+| `LLM_BACKEND` | LLM provider: `anthropic` (default), `openai`, `aliyun`, `ark`, `nvidia`, `openrouter` |
+| `LLM_MODEL` | Model override (default: provider's default) |
+| `LLM_BASE_URL` | API endpoint override (for proxies or private deployments) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (when using `anthropic` backend) |
+| `DASHSCOPE_API_KEY` | DashScope API key (when using `aliyun` backend) |
 
 ### Running Tests
 
@@ -111,7 +117,8 @@ DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test tests/int
 
 | Command | Description |
 |---|---|
-| `bun run dev` | Start development server |
+| `bun run dev` | Start Next.js development server |
+| `bun run hocuspocus` | Start Yjs WebSocket server (required for live sessions) |
 | `bun run build` | Build for production |
 | `bun run start` | Start production server |
 | `bun run test` | Run test suite |
