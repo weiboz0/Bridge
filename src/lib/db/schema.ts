@@ -30,6 +30,22 @@ export const editorModeEnum = pgEnum("editor_mode", [
   "javascript",
 ]);
 
+export const sessionStatusEnum = pgEnum("session_status", [
+  "active",
+  "ended",
+]);
+
+export const participantStatusEnum = pgEnum("participant_status", [
+  "active",
+  "idle",
+  "needs_help",
+]);
+
+export const annotationAuthorTypeEnum = pgEnum("annotation_author_type", [
+  "teacher",
+  "ai",
+]);
+
 // --- Tables ---
 
 export const schools = pgTable("schools", {
@@ -113,5 +129,90 @@ export const classroomMembers = pgTable(
       table.classroomId,
       table.userId
     ),
+  ]
+);
+
+export const liveSessions = pgTable(
+  "live_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classroomId: uuid("classroom_id")
+      .notNull()
+      .references(() => classrooms.id, { onDelete: "cascade" }),
+    teacherId: uuid("teacher_id")
+      .notNull()
+      .references(() => users.id),
+    status: sessionStatusEnum("status").notNull().default("active"),
+    settings: jsonb("settings").default({}),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    endedAt: timestamp("ended_at"),
+  },
+  (table) => [
+    index("live_sessions_classroom_idx").on(table.classroomId),
+    index("live_sessions_status_idx").on(table.classroomId, table.status),
+  ]
+);
+
+export const sessionParticipants = pgTable(
+  "session_participants",
+  {
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => liveSessions.id, { onDelete: "cascade" }),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: participantStatusEnum("status").notNull().default("active"),
+    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    leftAt: timestamp("left_at"),
+  },
+  (table) => [
+    uniqueIndex("session_participant_unique_idx").on(
+      table.sessionId,
+      table.studentId
+    ),
+    index("session_participants_session_idx").on(table.sessionId),
+  ]
+);
+
+export const aiInteractions = pgTable(
+  "ai_interactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => liveSessions.id, { onDelete: "cascade" }),
+    enabledByTeacherId: uuid("enabled_by_teacher_id")
+      .notNull()
+      .references(() => users.id),
+    messages: jsonb("messages").default([]).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ai_interactions_session_idx").on(table.sessionId),
+    index("ai_interactions_student_idx").on(table.studentId, table.sessionId),
+  ]
+);
+
+export const codeAnnotations = pgTable(
+  "code_annotations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    documentId: varchar("document_id", { length: 255 }).notNull(),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    authorType: annotationAuthorTypeEnum("author_type").notNull(),
+    lineStart: varchar("line_start", { length: 10 }).notNull(),
+    lineEnd: varchar("line_end", { length: 10 }).notNull(),
+    content: text("content").notNull(),
+    resolved: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("code_annotations_document_idx").on(table.documentId),
   ]
 );
