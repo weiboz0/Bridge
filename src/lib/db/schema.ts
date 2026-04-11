@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   index,
   boolean,
+  integer,
 } from "drizzle-orm/pg-core";
 
 // --- Enums ---
@@ -74,6 +75,23 @@ export const orgMemberStatusEnum = pgEnum("org_member_status", [
   "pending",
   "active",
   "suspended",
+]);
+
+export const classStatusEnum = pgEnum("class_status", ["active", "archived"]);
+
+export const classMemberRoleEnum = pgEnum("class_member_role", [
+  "instructor",
+  "ta",
+  "student",
+  "observer",
+  "guest",
+  "parent",
+]);
+
+export const programmingLanguageEnum = pgEnum("programming_language", [
+  "python",
+  "javascript",
+  "blockly",
 ]);
 
 // --- Tables ---
@@ -282,5 +300,128 @@ export const codeAnnotations = pgTable(
   },
   (table) => [
     index("code_annotations_document_idx").on(table.documentId),
+  ]
+);
+
+// --- Course Hierarchy Tables ---
+
+export const courses = pgTable(
+  "courses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description").default(""),
+    gradeLevel: gradeLevelEnum("grade_level").notNull(),
+    language: programmingLanguageEnum("language").notNull().default("python"),
+    isPublished: boolean("is_published").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("courses_org_idx").on(table.orgId),
+    index("courses_created_by_idx").on(table.createdBy),
+  ]
+);
+
+export const topics = pgTable(
+  "topics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description").default(""),
+    sortOrder: integer("sort_order").notNull().default(0),
+    lessonContent: jsonb("lesson_content").default({}),
+    starterCode: text("starter_code"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("topics_course_idx").on(table.courseId),
+    index("topics_sort_idx").on(table.courseId, table.sortOrder),
+  ]
+);
+
+export const classes = pgTable(
+  "classes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 255 }).notNull(),
+    term: varchar("term", { length: 100 }).default(""),
+    joinCode: varchar("join_code", { length: 10 }).notNull(),
+    status: classStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("classes_join_code_idx").on(table.joinCode),
+    index("classes_course_idx").on(table.courseId),
+    index("classes_org_idx").on(table.orgId),
+  ]
+);
+
+export const classMemberships = pgTable(
+  "class_memberships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: classMemberRoleEnum("role").notNull().default("student"),
+    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("class_membership_unique_idx").on(table.classId, table.userId),
+    index("class_memberships_class_idx").on(table.classId),
+    index("class_memberships_user_idx").on(table.userId),
+  ]
+);
+
+export const newClassrooms = pgTable(
+  "new_classrooms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" })
+      .unique(),
+    editorMode: editorModeEnum("editor_mode").notNull().default("python"),
+    settings: jsonb("settings").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("new_classrooms_class_idx").on(table.classId),
+  ]
+);
+
+export const sessionTopics = pgTable(
+  "session_topics",
+  {
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => liveSessions.id, { onDelete: "cascade" }),
+    topicId: uuid("topic_id")
+      .notNull()
+      .references(() => topics.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("session_topic_unique_idx").on(table.sessionId, table.topicId),
   ]
 );
