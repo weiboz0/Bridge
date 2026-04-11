@@ -57,13 +57,17 @@ export function StudentTile({
     // Initial render
     highlight(yText.toString());
 
-    // Subscribe to changes
+    // Subscribe to changes with debounce to avoid flooding Shiki
+    // when many students type simultaneously
+    let debounceTimer: ReturnType<typeof setTimeout>;
     const observer = () => {
-      highlight(yText.toString());
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => highlight(yText.toString()), 300);
     };
     yText.observe(observer);
 
     return () => {
+      clearTimeout(debounceTimer);
       yText.unobserve(observer);
       provider.destroy();
       yDoc.destroy();

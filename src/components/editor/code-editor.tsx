@@ -68,16 +68,6 @@ export function CodeEditor({
     }
   };
 
-  // React to theme changes
-  useEffect(() => {
-    if (editorRef.current) {
-      const monaco = (window as any).monaco;
-      if (monaco) {
-        monaco.editor.setTheme(theme === "dark" ? "bridge-dark" : "bridge-light");
-      }
-    }
-  }, [theme]);
-
   const modelUri = `inmemory://editor/${instanceId}`;
 
   return (
