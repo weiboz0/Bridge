@@ -9,10 +9,16 @@ const testClient = postgres(
 export const testDb = drizzle(testClient, { schema });
 
 export async function cleanupDatabase() {
+  await testDb.delete(schema.sessionTopics);
   await testDb.delete(schema.codeAnnotations);
   await testDb.delete(schema.aiInteractions);
   await testDb.delete(schema.sessionParticipants);
   await testDb.delete(schema.liveSessions);
+  await testDb.delete(schema.newClassrooms);
+  await testDb.delete(schema.classMemberships);
+  await testDb.delete(schema.classes);
+  await testDb.delete(schema.topics);
+  await testDb.delete(schema.courses);
   await testDb.delete(schema.classroomMembers);
   await testDb.delete(schema.classrooms);
   await testDb.delete(schema.orgMemberships);
@@ -103,6 +109,58 @@ export async function createTestSession(
     })
     .returning();
   return session;
+}
+
+export async function createTestCourse(
+  orgId: string,
+  createdBy: string,
+  overrides: Partial<typeof schema.courses.$inferInsert> = {}
+) {
+  const [course] = await testDb
+    .insert(schema.courses)
+    .values({
+      orgId,
+      createdBy,
+      title: "Test Course",
+      gradeLevel: "6-8",
+      ...overrides,
+    })
+    .returning();
+  return course;
+}
+
+export async function createTestTopic(
+  courseId: string,
+  overrides: Partial<typeof schema.topics.$inferInsert> = {}
+) {
+  const [topic] = await testDb
+    .insert(schema.topics)
+    .values({
+      courseId,
+      title: "Test Topic",
+      sortOrder: 0,
+      ...overrides,
+    })
+    .returning();
+  return topic;
+}
+
+export async function createTestClass(
+  courseId: string,
+  orgId: string,
+  overrides: Partial<typeof schema.classes.$inferInsert> = {}
+) {
+  const [cls] = await testDb
+    .insert(schema.classes)
+    .values({
+      courseId,
+      orgId,
+      title: "Test Class",
+      joinCode: nanoid(8),
+      ...overrides,
+    })
+    .returning();
+  return cls;
 }
 
 export async function closeTestDb() {
