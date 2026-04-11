@@ -12,7 +12,7 @@ export default async function Home() {
   if (session?.user?.id) {
     // Detect roles and redirect to primary portal
     const memberships = await getUserMemberships(db, session.user.id);
-    const roles = buildUserRoles(session.user.isPlatformAdmin, memberships as any);
+    const roles = buildUserRoles(session.user.isPlatformAdmin, memberships);
     const path = getPrimaryPortalPath(roles);
     redirect(path);
   }

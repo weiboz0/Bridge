@@ -2,12 +2,13 @@ import type { UserRole, PortalRole } from "./types";
 
 const ROLE_PRIORITY: PortalRole[] = ["admin", "org_admin", "teacher", "student", "parent"];
 
-interface Membership {
+export interface MembershipRecord {
   role: string;
   status: string;
   orgId: string;
   orgName: string;
   orgStatus: string;
+  [key: string]: unknown; // allow extra fields from DB query
 }
 
 /**
@@ -16,7 +17,7 @@ interface Membership {
  */
 export function buildUserRoles(
   isPlatformAdmin: boolean,
-  memberships: Membership[]
+  memberships: MembershipRecord[]
 ): UserRole[] {
   const roles: UserRole[] = [];
 

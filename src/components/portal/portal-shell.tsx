@@ -20,7 +20,7 @@ export async function PortalShell({ portalRole, children }: PortalShellProps) {
   }
 
   const memberships = await getUserMemberships(db, session.user.id);
-  const roles = buildUserRoles(session.user.isPlatformAdmin, memberships as any);
+  const roles = buildUserRoles(session.user.isPlatformAdmin, memberships);
 
   if (!isAuthorizedForPortal(roles, portalRole)) {
     redirect("/");

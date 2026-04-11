@@ -10,6 +10,14 @@ export function useSidebar() {
     if (stored === "true") setCollapsed(true);
   }, []);
 
+  const toggle = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("bridge-sidebar-collapsed", String(next));
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === "b") {
@@ -19,15 +27,7 @@ export function useSidebar() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  const toggle = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      localStorage.setItem("bridge-sidebar-collapsed", String(next));
-      return next;
-    });
-  }, []);
+  }, [toggle]);
 
   return { collapsed, toggle };
 }

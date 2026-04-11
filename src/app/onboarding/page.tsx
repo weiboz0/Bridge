@@ -32,7 +32,7 @@ export default async function OnboardingPage() {
             <p className="text-sm text-muted-foreground">
               Register your organization to start creating courses and classes.
             </p>
-            <Link href="/api/orgs" className={buttonVariants({ size: "sm" })}>
+            <Link href="/register-org" className={buttonVariants({ size: "sm" })}>
               Register Organization
             </Link>
           </div>

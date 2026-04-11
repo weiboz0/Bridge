@@ -2336,3 +2336,54 @@ git commit -m "Fix type/build errors from portal shell implementation"
 **Total new files:** ~20 (components, hooks, configs, routes, tests)
 **Modified files:** 2 (`src/app/layout.tsx`, `src/app/page.tsx`, `src/app/(auth)/login/page.tsx`)
 **Commits:** ~9 incremental commits
+
+---
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-11
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #9 — feat: portal shell with sidebar navigation
+- **Verdict**: Approved with changes
+
+**Must Fix**
+
+1. `[FIXED]` FOUC script adds both "light" and "dark" classes — should only toggle "dark".
+   → Response: Fixed script and useTheme hook to only add/remove "dark" class.
+
+2. `[FIXED]` Three `as any` casts suppress type mismatches in role detection chain.
+   → Response: Exported `MembershipRecord` interface with index signature, removed all `as any` casts.
+
+3. `[WONTFIX]` `isAuthorizedForPortal` takes pre-built roles instead of raw memberships.
+   → Response: The server component builds roles correctly before calling — this is a reasonable factoring. Adding defensive re-computation would be redundant.
+
+**Should Fix**
+
+4. `[WONTFIX]` Missing `detectUserRoles` function — `buildUserRoles` returns per-org entries.
+   → Response: Role switcher shows unique roles by role name (not per-org). Multi-org dedup will be addressed when multi-org UX is designed.
+
+5. `[WONTFIX]` Four planned test files not created (nav-config, sidebar, role-switcher, theme-toggle).
+   → Response: Core logic tested (15 tests). Component tests deferred to Plan 010 when components are more complete.
+
+6. `[FIXED]` Mobile nav uses `<a>` instead of Next.js `<Link>` causing full page reloads.
+   → Response: Replaced with `<Link>` components.
+
+7. `[FIXED]` Duplicate `getIconChar` in sidebar-nav.tsx and sidebar.tsx.
+   → Response: Extracted to shared `src/lib/portal/icons.ts`.
+
+8. `[FIXED]` `toggleTheme` has stale closure bug reading `theme` state.
+   → Response: Now reads current state from DOM (`classList.contains("dark")`).
+
+9. `[FIXED]` `useSidebar` keyboard effect missing `toggle` in dependency array.
+   → Response: Added `toggle` to deps, reordered declarations to fix block-scoped variable error.
+
+10. `[WONTFIX]` `PortalConfig` uses `basePath` instead of `prefix`.
+    → Response: Naming difference is acceptable. The null return from `getPortalConfig` provides a safe fallback.
+
+11-15. `[WONTFIX]` Icon naming, accessibility, positioning, footer email, onboarding path.
+    → Response: Noted for Plan 010. Icons will be upgraded to Lucide React. Accessibility attributes will be added with the full portal pages.
+
+17. `[FIXED]` Onboarding "Register Organization" link points to `/api/orgs` (JSON response).
+    → Response: Changed to `/register-org`.

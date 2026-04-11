@@ -22,7 +22,11 @@ export const metadata: Metadata = {
 const themeScript = `
 (function() {
   var theme = localStorage.getItem('bridge-theme') || 'dark';
-  document.documentElement.classList.add(theme);
+  if (theme === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
 })()
 `;
 

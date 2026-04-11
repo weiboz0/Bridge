@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { NavItem } from "@/lib/portal/types";
+import { getIconChar } from "@/lib/portal/icons";
 
 interface SidebarNavProps {
   items: NavItem[];
@@ -35,22 +36,4 @@ export function SidebarNav({ items, collapsed }: SidebarNavProps) {
       })}
     </nav>
   );
-}
-
-function getIconChar(iconName: string): string {
-  const icons: Record<string, string> = {
-    "layout-dashboard": "◻",
-    "building-2": "🏢",
-    "users": "👥",
-    "settings": "⚙",
-    "graduation-cap": "🎓",
-    "book-open": "📖",
-    "school": "🏫",
-    "calendar": "📅",
-    "bar-chart-3": "📊",
-    "code": "⌨",
-    "help-circle": "❓",
-    "file-text": "📄",
-  };
-  return icons[iconName] || "•";
 }
