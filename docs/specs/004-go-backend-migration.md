@@ -12,6 +12,8 @@ Migrate all backend logic from Next.js API routes to a Go HTTP service. Next.js 
 
 **Migration strategy:** Incremental with proxy (Option B). Next.js proxies `/api/*` to Go for migrated routes. Contract tests compare Go vs Next.js responses before each route is flipped.
 
+**Source reference:** `/home/chris/workshop/magicburg-go/gobackend/` — the Go backend from the magicburg project. Shared patterns (auth, LLM, tools, workflows, events, sandbox) are copied from this source and adapted for Bridge. Directory structure mirrors magicburg for future sync. See `docs/shared-patterns.md` for tracking.
+
 ---
 
 ## Architecture
