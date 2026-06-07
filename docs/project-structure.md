@@ -24,10 +24,13 @@
 
 All three services must be running for E2E tests.
 
-Ports are configurable via `.env` (see the override env vars above). When you
-change a port, update the matching URL var so services still find each other:
-`NEXTJS_PORT` ↔ `NEXTAUTH_URL`; `GO_PORT` ↔ `GO_INTERNAL_API_URL` / `GO_API_URL`;
-`HOCUSPOCUS_PORT` ↔ `NEXT_PUBLIC_HOCUSPOCUS_URL`.
+Ports are configurable via `.env` (see the override env vars above). On
+localhost the port vars are self-contained: `GO_API_URL` / `GO_INTERNAL_API_URL`
+derive from `GO_PORT` automatically. The only port-paired var you must set by
+hand for local dev is `NEXTAUTH_URL` (it carries the full host:port and feeds
+the OAuth redirect). For non-localhost setups (staging, tunnel, separate host)
+set the explicit URL vars: `GO_API_URL` / `GO_INTERNAL_API_URL` (Go host) and
+`NEXT_PUBLIC_HOCUSPOCUS_URL` (browser-reachable Hocuspocus host).
 
 ## Running the Services
 
