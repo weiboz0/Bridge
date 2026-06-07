@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p ${NEXTJS_PORT:-3003}",
+    "dev": "bun run scripts/dev.ts",
     "dev:go": "cd platform && go run ./cmd/api/",
     "dev:all": "bun run --parallel dev hocuspocus dev:go",
     "build": "next build",
