@@ -16,19 +16,24 @@
 
 ## Service Ports
 
-| Service | Port | Notes |
-|---------|------|-------|
-| Next.js | 3003 | Frontend; proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`) |
-| Go platform | 8002 | API server |
-| Hocuspocus | 4000 | Yjs collaboration |
+| Service | Default port | Override env var | Notes |
+|---------|------|------|-------|
+| Next.js | 3003 | `NEXTJS_PORT` | Frontend; proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`) |
+| Go platform | 8002 | `GO_PORT` | API server |
+| Hocuspocus | 4000 | `HOCUSPOCUS_PORT` | Yjs collaboration |
 
 All three services must be running for E2E tests.
+
+Ports are configurable via `.env` (see the override env vars above). When you
+change a port, update the matching URL var so services still find each other:
+`NEXTJS_PORT` ↔ `NEXTAUTH_URL`; `GO_PORT` ↔ `GO_INTERNAL_API_URL` / `GO_API_URL`;
+`HOCUSPOCUS_PORT` ↔ `NEXT_PUBLIC_HOCUSPOCUS_URL`.
 
 ## Running the Services
 
 | Service | Command |
 |---------|---------|
-| Next.js dev | `PORT=3003 bun run dev` |
+| Next.js dev | `bun run dev` (port from `NEXTJS_PORT`, default 3003) |
 | Go platform (hot-reload) | `cd platform && air` |
 | Go platform (manual) | `cd platform && go run ./cmd/api/` |
 | Hocuspocus | `bun run hocuspocus` |
