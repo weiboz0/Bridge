@@ -33,10 +33,16 @@ change a port, update the matching URL var so services still find each other:
 
 | Service | Command |
 |---------|---------|
+| **All three at once** | `bun run dev:all` (parallel, prefixed output; Go via `go run`) |
 | Next.js dev | `bun run dev` (port from `NEXTJS_PORT`, default 3003) |
-| Go platform (hot-reload) | `cd platform && air` |
-| Go platform (manual) | `cd platform && go run ./cmd/api/` |
+| Go platform (manual) | `bun run dev:go` — or `cd platform && go run ./cmd/api/` |
+| Go platform (hot-reload) | `cd platform && air` (or `make dev`) |
 | Hocuspocus | `bun run hocuspocus` |
 | DB studio | `bun run db:studio` |
+
+`dev:all` is the quickest start; it runs all three services in one terminal
+with Foreman-style prefixed logs and shuts them all down on Ctrl+C. It uses
+`go run` for the Go API (no hot-reload) — run `air` / `make dev` in a separate
+terminal when you want Go to rebuild on save.
 
 Full dev setup (PostgreSQL, env vars, auth, migrations) lives in `docs/setup.md`.

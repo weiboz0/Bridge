@@ -61,11 +61,18 @@ createdb bridge_test
 # Run migrations
 bun run db:migrate
 
-# Start all services (three terminals)
+# Start all services at once (one terminal, prefixed output)
+bun run dev:all
+
+# ...or run each in its own terminal:
 bun run dev                    # Terminal 1: Next.js (port 3003)
 bun run hocuspocus             # Terminal 2: Yjs WebSocket (port 4000)
-cd platform && make dev        # Terminal 3: Go API (port 8002)
+cd platform && make dev        # Terminal 3: Go API (port 8002, hot-reload via air)
 ```
+
+Ports are read from `.env` (`NEXTJS_PORT` / `GO_PORT` / `HOCUSPOCUS_PORT`); the
+numbers above are the defaults. `dev:all` runs the Go API via `go run` (no air
+hot-reload) — use `make dev` in its own terminal if you want Go hot-reload.
 
 ### Environment Variables
 
