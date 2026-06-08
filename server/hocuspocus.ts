@@ -19,10 +19,10 @@ import { rechckDocumentAccess, verifyRealtimeJwt } from "./realtime-jwt";
 //   default value under BRIDGE_HOST_EXPOSURE=exposed.
 const TOKEN_SECRET = process.env.HOCUSPOCUS_TOKEN_SECRET ?? "";
 const BRIDGE_HOST_EXPOSURE = (process.env.BRIDGE_HOST_EXPOSURE ?? "").toLowerCase().trim();
-// For local dev the Go port alone (GO_PORT, default 8002) is enough — the
+// For local dev the Go port alone (PLATFORM_PORT, default 8002) is enough — the
 // internal URL is derived from it. Set GO_INTERNAL_API_URL explicitly to reach
 // a non-localhost Go API (e.g. when Hocuspocus runs on a different host).
-const GO_DEFAULT_INTERNAL_URL = `http://localhost:${process.env.GO_PORT ?? "8002"}`;
+const GO_DEFAULT_INTERNAL_URL = `http://localhost:${process.env.PLATFORM_PORT ?? "8002"}`;
 const GO_INTERNAL_API_URL = process.env.GO_INTERNAL_API_URL ?? GO_DEFAULT_INTERNAL_URL;
 
 // HOCUSPOCUS_PORT: TCP port the collaboration server listens on. Defaults to

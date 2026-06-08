@@ -70,7 +70,7 @@ bun run hocuspocus             # Terminal 2: Yjs WebSocket (port 4000)
 cd platform && make dev        # Terminal 3: Go API (port 8002, hot-reload via air)
 ```
 
-Ports are read from `.env` (`NEXTJS_PORT` / `GO_PORT` / `HOCUSPOCUS_PORT`); the
+Ports are read from `.env` (`NEXTJS_PORT` / `PLATFORM_PORT` / `HOCUSPOCUS_PORT`); the
 numbers above are the defaults. `dev:all` runs the Go API via `go run` (no air
 hot-reload) — use `make dev` in its own terminal if you want Go hot-reload.
 

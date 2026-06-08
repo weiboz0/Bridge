@@ -8,10 +8,10 @@ import type { NextConfig } from "next";
 // route without an allowlist entry fails CI immediately (forward check); deleting
 // a shadow file without removing its allowlist entry also fails (reverse check).
 // Proxy target for migrated Go routes. For local dev, the Go port alone
-// (GO_PORT, default 8002) is enough — the URL is derived from it. Set
+// (PLATFORM_PORT, default 8002) is enough — the URL is derived from it. Set
 // GO_API_URL explicitly to point at a non-localhost host (staging, tunnel).
 const GO_API_URL =
-  process.env.GO_API_URL || `http://localhost:${process.env.GO_PORT || "8002"}`;
+  process.env.GO_API_URL || `http://localhost:${process.env.PLATFORM_PORT || "8002"}`;
 
 // Routes that have been migrated to Go and should be proxied.
 // Add routes here as they are migrated and contract-tested.

@@ -19,14 +19,14 @@
 | Service | Default port | Override env var | Notes |
 |---------|------|------|-------|
 | Next.js | 3003 | `NEXTJS_PORT` | Frontend; proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`) |
-| Go platform | 8002 | `GO_PORT` | API server |
+| Go platform | 8002 | `PLATFORM_PORT` | API server |
 | Hocuspocus | 4000 | `HOCUSPOCUS_PORT` | Yjs collaboration |
 
 All three services must be running for E2E tests.
 
 Ports are configurable via `.env` (see the override env vars above). On
 localhost the port vars are self-contained: `GO_API_URL` / `GO_INTERNAL_API_URL`
-derive from `GO_PORT` automatically. The only port-paired var you must set by
+derive from `PLATFORM_PORT` automatically. The only port-paired var you must set by
 hand for local dev is `NEXTAUTH_URL` (it carries the full host:port and feeds
 the OAuth redirect). For non-localhost setups (staging, tunnel, separate host)
 set the explicit URL vars: `GO_API_URL` / `GO_INTERNAL_API_URL` (Go host) and
