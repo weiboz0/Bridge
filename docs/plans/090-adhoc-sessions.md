@@ -38,13 +38,19 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 
 2. **Keep `sessions.teacher_id` as the host column.** No rename (it's referenced across handlers, stores, tests, and the realtime authorizers). Treat it semantically as "host"; add a clarifying comment at the column's store definition and in API docs. A rename is explicitly a non-goal — too much churn for no functional gain.
 
-3. **Abuse cap: max concurrent live sessions per host.** Enforce a per-host limit of **5** simultaneously-`live` sessions in `CreateSession` (count `sessions WHERE teacher_id = $host AND status='live'`; return HTTP 429 with a clear message when exceeded). Platform admins are exempt. Constant lives in the handler, documented. (Rationale: cheap, stops the obvious runaway; real moderation/rate-limiting is a follow-up.)
+3. **Abuse cap: max concurrent live sessions per host.** Enforce a per-host limit of **5** simultaneously-`live` sessions in `CreateSession` (count `sessions WHERE teacher_id = $host AND status='live'`; return HTTP 429 with a clear message when exceeded). Platform admins are exempt. Constant lives in the handler, documented. **Race (Codex finding):** a bare pre-count then insert races under concurrent creates. Enforce inside the create transaction with a per-host advisory lock (`pg_advisory_xact_lock(hashtext('session_create:'||$host))`) so the count→insert is serialized per host. Note the existing "end prior live session" logic (`store/sessions.go:151-159`) is class-scoped and does NOT apply to class-less sessions — the cap is the only class-less guard. (Rationale: cheap, stops the obvious runaway; real rate-limiting is a follow-up.)
 
 4. **`visibility` enum on sessions.** New column `visibility session_visibility NOT NULL DEFAULT 'unlisted'` with enum values `('unlisted','public')`. `unlisted` = current behavior (join by link/invite/class only; never listed). `public` = listed in the browse directory AND open-join for any authenticated user. Default `unlisted` preserves every existing session's behavior. Enum (not boolean) so a future `private`/`org_only` value is a non-breaking add. Migration adds the type + column; backfill is the default.
 
 5. **`canJoinSession` consistency fix.** Restructure the class-less branch (`sessions.go:505-510`) so it does NOT early-return 403. Order for a class-less session becomes: admin/impersonator → host (`TeacherID`) → participant row `invited`/`present` → **`visibility=='public'` ⇒ allow open self-join** → else 403. For public open-join, `JoinSession` inserts a `present` participant row (idempotent). This single fix unblocks the regular join POST, SSE stream, and help-queue for ad-hoc guests, and enables browse-then-join. Class-bound behavior is unchanged.
 
+5a. **Mirror the fix in store-level `CanAccessSession`** (Codex finding). `GET /api/sessions/{id}` gates on a *separate* check — handler `sessions.go:409-442` backed by `store/sessions.go:687-743` — not on `canJoinSession`. It has the same class-less limitation. Apply the identical fall-through (participant row, then `visibility=='public'`) there, or browse/link users hit inconsistent 404s on the session detail fetch. Both checks must agree; a shared helper is preferred over two parallel edits.
+
+5b. **`GetSessionTopics` regression** (Codex finding). `GetSessionTopics` (`sessions.go:834-860`) restricts class-less callers to teacher/admin, so an ad-hoc guest 404s if the student room fetches topics (`src/components/session/student/student-session.tsx`). Relax it to also allow a `present`/`invited` participant (read-only) for class-less sessions, consistent with the fixes above. Add to Phase 2.
+
 6. **Browse endpoint.** `GET /api/sessions/public` — returns `live` + `visibility='public'` sessions, newest first, paginated (`limit`/`cursor`), each with `{ id, title, hostName, participantCount, startedAt }`. No class filter. Auth required (any user). New store method `ListPublicSessions`. Participant count via a join/subquery on `session_participants` with status `present`.
+   - **Route registration order (Codex finding):** register `/api/sessions/public` BEFORE the `/{id}` route, or `ValidateUUIDParam` middleware rejects the literal `public` as a malformed UUID (`sessions.go:45-75`). Static segments before the param route.
+   - **Index (Codex finding):** the participant index today is `session_participants(session_id)` only (`schema.ts` ~306-312). The status-filtered count needs a composite `(session_id, status)` index — add it in the Phase 3 migration alongside the enum/column.
 
 7. **Host can set visibility.** Extend `PatchSession` (`sessions.go:1225`) to accept `visibility` (`unlisted`|`public`), host/admin only. Surfaced in the host header UI as a toggle ("List publicly"). Default on create stays `unlisted`; create accepts an optional `visibility` too so a user can start a public session in one step.
 
@@ -53,7 +59,9 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
    - `/sessions/[id]` — the session room. Fetches `teacher-page` if the caller is the host (200) and renders `TeacherDashboard`; otherwise falls back to `student-page` and renders `StudentSession`. This makes hosting reachable for non-teacher hosts without duplicating the dashboard.
    - The existing `/teacher/sessions/*` and `/student/sessions/*` routes stay (teachers/students keep their portal entry points); the new neutral routes are additive. `/s/[token]` redirect target is updated to point class-less joins at `/sessions/[id]` (was `/student/sessions/[id]`), keeping class-bound joins where they are.
 
-9. **Navigation.** Add a "Sessions" nav entry pointing at `/sessions` for every portal role (deduped by href the same way `/library` is). For role-less authenticated users, `/sessions` is reachable directly (role-neutral shell) and `handlers/me.go` is extended so a user with zero roles gets `primaryPortalPath: "/sessions"` instead of `/onboarding` only when they have previously hosted/joined a session — otherwise `/onboarding` is unchanged. (Keep the onboarding flow intact; just stop stranding session users.)
+9. **Navigation + role-neutral admission.** Add a "Sessions" nav entry pointing at `/sessions` for every portal role (deduped by href the same way `/library` is).
+   - **Admit any authenticated user to the neutral shell (revised after self-review + Codex finding).** The role-neutral `PortalShell portalRole={null}` and `/api/me/portal-access` today redirect/deny zero-role users (`src/components/portal/portal-shell.tsx:46-50`, `handlers/me.go:161-162` gating on `len(roles)>0`). For the `/sessions` subtree, admission must be "any authenticated user", not "has a portal role". This backend change MUST land before the frontend route is testable (see phase ordering).
+   - **Drop the "session history" heuristic** from the earlier draft — computing whether a user has hosted/joined on every roles call is fuzzy and costly. Instead: `primaryPortalPath` for a brand-new zero-role user stays `/onboarding` (unchanged), and `/onboarding` plus the nav simply surface a "Browse / start a session" link to `/sessions`. `/sessions` itself is reachable by any authenticated user regardless of role. This is simpler and avoids redirect-loop risk.
 
 10. **Tests fill the class-less gap.** The sweep noted there is **no** existing test coverage for class-less realtime or class-less join paths. Every backend phase adds integration tests for the class-less + public path specifically (create as plain user, cap enforcement, public browse listing, public open-join, help-queue/SSE for an ad-hoc guest, realtime token mint for a class-less participant).
 
@@ -74,30 +82,38 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 - Comment `teacher_id` as host (Decision 2).
 - Tests: plain registered user (no org membership) can create a class-less session; student-role user can; cap returns 429 at limit+1; admin exempt; class-bound create still gated (cross-user 403 preserved).
 
-### Phase 2 — Backend: `canJoinSession` consistency fix *(Codex)*
-- Restructure class-less branch (Decision 5) to fall through participant-row check; no `visibility` logic yet (kept in Phase 3 to isolate the bugfix).
-- Verify SSE (`SessionEvents`) and `ToggleHelp` now work for an invited/present ad-hoc guest.
-- Tests: ad-hoc invited guest passes `canJoinSession`; raises hand; subscribes to SSE; `left` status still denied; class-bound unchanged.
+### Phase 2 — Backend: class-less access consistency fixes *(Codex)*
+Consolidates ALL the class-less access-check fixes (no `visibility` yet — that's Phase 3 — to isolate the bugfix from the feature):
+- Restructure `canJoinSession` class-less branch (Decision 5) to fall through to the participant-row check.
+- Apply the same fall-through to store-level `CanAccessSession` (Decision 5a) — ideally via one shared helper so the two never drift.
+- Relax `GetSessionTopics` for class-less `present`/`invited` participants (Decision 5b).
+- Verify SSE (`SessionEvents`), `ToggleHelp`, and session-detail `GET /{id}` now work for an invited/present ad-hoc guest.
+- Tests: ad-hoc invited guest passes `canJoinSession` AND `CanAccessSession` AND `GetSessionTopics`; raises hand; subscribes to SSE; `left` status still denied; class-bound matrix unchanged (table-driven, both class-bound and class-less rows).
 
 ### Phase 3 — Backend: visibility + browse + public open-join *(Codex)*
-- Migration: `session_visibility` enum + `sessions.visibility` column default `'unlisted'` (`drizzle/` + regenerate). Update `store/sessions.go` scan/insert and the TS schema mirror (`src/lib/db/schema.ts`).
+- Migration: `session_visibility` enum + `sessions.visibility` column default `'unlisted'`, AND the `session_participants(session_id, status)` composite index (Decision 6). Regenerate drizzle. Update `store/sessions.go` scan/insert **and verify column scan order** (Codex: scan at ~110-117 is positional and fragile) and the TS schema mirror (`src/lib/db/schema.ts` ~227-253, which has no visibility column today).
 - `CreateSession` accepts optional `visibility`; `PatchSession` accepts `visibility` (host/admin only) — Decision 7.
-- `canJoinSession`: add the `visibility=='public'` open-join clause (Decision 5); `JoinSession` idempotent-inserts a `present` row for public open-join.
-- `ListPublicSessions` store method + `GET /api/sessions/public` handler + route registration (Decision 6).
-- Tests: default visibility is `unlisted`; only `public`+`live` appear in browse; non-host cannot set visibility; public open-join inserts participant + is idempotent; ended/unlisted excluded from browse; pagination.
+- `canJoinSession` + `CanAccessSession`: add the `visibility=='public'` open-join clause (Decision 5/5a); `JoinSession` idempotent-inserts a `present` row for public open-join.
+- `ListPublicSessions` store method + `GET /api/sessions/public` handler, **registered before `/{id}`** (Decision 6).
+- Tests: default visibility `unlisted`; only `public`+`live` in browse; non-host cannot set visibility; public open-join inserts participant + idempotent; ended/unlisted excluded; pagination; the `public` literal does not hit `ValidateUUIDParam`.
 
-### Phase 4 — Frontend: neutral routes, browse, host reachability, visibility toggle *(Sonnet)*
+### Phase 4 — Backend: role-neutral admission + me.go *(Codex)*
+Must land BEFORE the frontend route (Codex ordering finding — the neutral shell is dead without it):
+- `/api/me/portal-access` (`handlers/me.go:161-162`) + `PortalShell` (`portal-shell.tsx:46-50`): admit any authenticated user to the role-neutral (`portalRole=null`) subtree instead of requiring `len(roles)>0`. Keep per-role gating for role-specific subtrees unchanged.
+- Leave `primaryPortalPath` for brand-new zero-role users as `/onboarding` (Decision 9 — no history heuristic).
+- Tests: zero-role authenticated user is admitted to the neutral shell; role-specific portals still gate.
+
+### Phase 5 — Frontend: neutral routes, browse, host reachability, visibility toggle *(Sonnet)*
 - `src/app/(portal)/sessions/layout.tsx` → `PortalShell portalRole={null}`.
-- `/sessions` browse page: list from `GET /api/sessions/public` (title, host, count, started-at, Join button) + "Start a session" (`StartSessionButton mode="orphan"`, available to any user).
-- `/sessions/[id]` room: host → `TeacherDashboard`, else → `StudentSession` (reuse existing components; pick by which page payload returns 200).
+- `/sessions` browse page: list from `GET /api/sessions/public` (title, host, count, started-at, Join) + "Start a session" (`StartSessionButton mode="orphan"`, available to any user).
+- `/sessions/[id]` room: fetch `teacher-page` first; if 200 → `TeacherDashboard` (host), else `student-page` → `StudentSession`. Reuse existing components.
+- **Redirect branching (Codex finding):** `StartSessionButton` currently always routes to `/teacher/sessions/{id}` (`start-session-button.tsx:82-83`) and `/s/[token]` to `/student/sessions/{id}` (`s/[token]/page.tsx:77-83`). Update both: class-less / non-teacher host → `/sessions/{id}`; class-bound paths unchanged. Prevents hosts/guests landing in a portal that bounces them.
 - Visibility toggle in `src/components/session/teacher/teacher-header.tsx` (PATCH `visibility`).
-- Update `/s/[token]` class-less redirect → `/sessions/[id]` (Decision 8).
-- Nav: add "Sessions" → `/sessions` to each role config, deduped by href (Decision 9).
-- Tests (Sonnet): browse page renders/empty-state; host vs participant view selection; visibility toggle calls PATCH; nav dedupe.
+- Nav: add "Sessions" → `/sessions` to each role config + the onboarding page link, deduped by href (Decision 9).
+- Tests (Sonnet): browse renders/empty-state; host vs participant selection; visibility toggle PATCHes; redirect branching; nav dedupe.
 
-### Phase 5 — Backend: routing + me.go + verify + docs
-- `handlers/me.go`: role-less session users → `/sessions` primary path (Decision 9), with test.
-- Docs: update `docs/` session/API docs + `README.md` feature bullet ("any user can host ad-hoc sessions; browse or join by link"). Document `visibility`, the browse endpoint, the concurrent cap, and the neutral routes.
+### Phase 6 — Verify + docs
+- Docs: `docs/` session/API docs + `README.md` feature bullet ("any user can host ad-hoc sessions; browse or join by link"). Document `visibility`, the browse endpoint + route order, the concurrent cap, the neutral routes, and the deferred-abuse note.
 - Full suite: `bun run test`, `cd platform && go test ./... -count=1`, targeted E2E for host→browse→join on a class-less public session.
 
 ## Risks
@@ -111,7 +127,27 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 
 ## Plan Review
 
-_(2-way: self-review on Opus + Codex, dispatched in parallel. Verdicts recorded below before any implementation.)_
+### Round 1 — Self-review (Opus 4.8) + Codex (parallel), 2026-06-08
+
+**Self-review (Opus) — APPROVE WITH CHANGES.** Concerns raised and resolved into the plan:
+- *Decision 9 over-engineered.* The "give `/sessions` as primary path to zero-role users with session history" rule needs a per-call history query and is a fuzzy heuristic. → **Resolved:** dropped it; `/sessions` is reachable by any authenticated user via the neutral shell, `/onboarding` stays the zero-role primary path, and a "Browse/start a session" link is surfaced in nav + onboarding. (Folded into Decision 9 + Phase 4.)
+- *Two-fetch host/participant selection on `/sessions/[id]` is slightly wasteful/racy.* → **Accepted as-is:** documented fallback order (teacher-page first, then student-page); a unified payload endpoint is a possible follow-up, not worth the surface now.
+- *Dropping the teacher gate lets a student-role org member host class-less sessions.* → **Conscious accept:** matches the explicit requirement ("any registered user"); class-bound sessions are unaffected. Called out in Risks/PR.
+
+**Codex — APPROVE WITH CHANGES.** Findings and resolutions:
+- *`GET /api/sessions/{id}` uses a separate store-level `CanAccessSession` (`sessions.go:409-442`, `store/sessions.go:687-743`) with the same class-less limitation.* → **Resolved:** Decision 5a + Phase 2 apply the identical fall-through there (shared helper preferred).
+- *`GetSessionTopics` (`sessions.go:834-860`) 404s class-less guests if the student room fetches topics.* → **Resolved:** Decision 5b + Phase 2 relax it for class-less participants.
+- *Concurrent-create race on the cap pre-count.* → **Resolved:** Decision 3 now uses a per-host `pg_advisory_xact_lock` inside the create txn; noted the class-scoped "end prior live" logic doesn't cover class-less.
+- *Role-less admission ordering — `portal-access`/`PortalShell` gate `len(roles)>0`, so the neutral route is dead until that changes.* → **Resolved:** new Phase 4 (backend admission) lands before Phase 5 (frontend).
+- *`/api/sessions/public` route must register before `/{id}` or `ValidateUUIDParam` rejects `public`.* → **Resolved:** Decision 6 + Phase 3.
+- *`/s/[token]` and `StartSessionButton` hard-route to `/student`·`/teacher` portals → bounce loops for guests/non-teacher hosts.* → **Resolved:** Phase 5 redirect branching.
+- *Participant index is `(session_id)` only; status-filtered browse count needs a composite index; positional scan order in `store/sessions.go` is fragile across the new column.* → **Resolved:** Decision 6 + Phase 3 (composite index in migration; verify scan order + TS mirror).
+
+All findings folded; no open blockers. **Round 2 below re-confirms with Codex against the revised plan.**
+
+### Round 2 — Codex re-confirm
+
+_(pending — dispatched against the revised plan)_
 
 ## Code Review
 
