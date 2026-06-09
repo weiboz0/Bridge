@@ -58,4 +58,6 @@ test-results/
 # claude code tooling state (per-session, machine-local)
 .claudecode-buddy/
 .coworker/
-.claude/
+# Ignore .claude/ contents (settings.local.json, *-state.json) but track shared skills.
+.claude/*
+!.claude/skills/
