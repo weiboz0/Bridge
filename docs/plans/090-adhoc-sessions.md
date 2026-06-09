@@ -85,7 +85,10 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 - Comment `teacher_id` as host (Decision 2).
 - Tests: plain registered user (no org membership) can create a class-less session; student-role user can; cap returns 429 at limit+1; admin exempt; class-bound create still gated (cross-user 403 preserved).
 
-### Phase 2 — Backend: class-less access consistency fixes *(Codex)*
+### Phase 2 — Backend: class-less access consistency fixes *(Codex)* — ✅ COMPLETE (`b962c3b`)
+
+> Implementation note: store `CanAccessSession` already handled class-less participants correctly (its participant check is unconditional); the bug was only in handler `canJoinSession`. Unified by having `canJoinSession` delegate to `CanAccessSession` (true single source of truth). Side effect: joining an *ended* session now returns 410 (was 400 in `JoinSession`), matching the token-join path. Verified: 8 new tests pass; full handlers (179s) + store (33s) suites green.
+
 Consolidates ALL the class-less access-check fixes (no `visibility` yet — that's Phase 3 — to isolate the bugfix from the feature):
 - Restructure `canJoinSession` class-less branch (Decision 5) to fall through to the participant-row check.
 - Apply the same fall-through to store-level `CanAccessSession` (Decision 5a) **via one shared helper** that both `canJoinSession` and `CanAccessSession` call — single source of truth, no drift.
