@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -204,6 +205,100 @@ func TestSessionHandler_CreateSession_Orphan201(t *testing.T) {
 	assert.Equal(t, fx.teacher.ID, session.TeacherID)
 	assert.Equal(t, "Office hours", session.Title)
 	assert.Nil(t, session.ClassID)
+}
+
+func TestSessionHandler_CreateSession_OrphanPlainRegisteredUser201(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Plain user office hours",
+	}, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
+	assert.Equal(t, fx.otherUser.ID, session.TeacherID)
+	assert.Nil(t, session.ClassID)
+}
+
+func TestSessionHandler_CreateSession_OrphanStudentOnlyUser201(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	_, err := fx.orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: fx.orgID, UserID: fx.student.ID, Role: "student", Status: "active",
+	})
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Student study session",
+	}, fx.claims(fx.student, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
+	assert.Equal(t, fx.student.ID, session.TeacherID)
+	assert.Nil(t, session.ClassID)
+}
+
+func TestSessionHandler_CreateSession_OrphanConcurrentLiveCap429(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 5; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title": "Ad-hoc capped " + strconv.Itoa(i+1),
+		}, fx.claims(fx.otherUser, false))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Ad-hoc capped 6",
+	}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_CreateSession_PlatformAdminExemptFromOrphanConcurrentLiveCap(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 6; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title": "Admin ad-hoc " + strconv.Itoa(i+1),
+		}, fx.claims(fx.otherUser, true))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+}
+
+func TestSessionHandler_CreateSession_ConcurrentLiveCapIgnoresClassBoundSessions(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 5; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title":   "Class-bound " + strconv.Itoa(i+1),
+			"classId": fx.classID,
+		}, fx.claims(fx.teacher, false))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+
+	for i := 0; i < 5; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title": "Ad-hoc after class-bound " + strconv.Itoa(i+1),
+		}, fx.claims(fx.teacher, false))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Ad-hoc after class-bound 6",
+	}, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_CreateSession_ClassBoundNonMember403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title":   "Forbidden class-bound",
+		"classId": fx.classID,
+	}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
 }
 
 func TestSessionHandler_GetSession_OrphanAccessibleByCreator(t *testing.T) {

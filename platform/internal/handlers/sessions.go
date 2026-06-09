@@ -37,6 +37,8 @@ type SessionHandler struct {
 	Broadcaster *events.Broadcaster
 }
 
+const maxConcurrentLiveSessionsPerHost = 5
+
 type sessionListResponse struct {
 	Items      []store.LiveSession `json:"items"`
 	NextCursor *string             `json:"nextCursor,omitempty"`
@@ -116,19 +118,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	// course's topics. Plan 048 phase 1.
 	var topicIDs []string
 
-	if body.ClassID == nil {
-		if !claims.IsPlatformAdmin {
-			ok, err := h.isTeacherOrOrgAdmin(r, claims.UserID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "Database error")
-				return
-			}
-			if !ok {
-				writeError(w, http.StatusForbidden, "Must be teacher or platform admin")
-				return
-			}
-		}
-	} else {
+	if body.ClassID != nil {
 		class, ok := h.authorizeSessionCreateForClass(w, r, *body.ClassID, claims)
 		if !ok {
 			return
@@ -172,14 +162,23 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	maxConcurrentLive := maxConcurrentLiveSessionsPerHost
+	if claims.IsPlatformAdmin {
+		maxConcurrentLive = 0
+	}
 	session, err := h.Sessions.CreateSession(r.Context(), store.CreateSessionInput{
-		ClassID:   body.ClassID,
-		TeacherID: claims.UserID,
-		Title:     body.Title,
-		Settings:  body.Settings,
-		TopicIDs:  topicIDs,
+		ClassID:           body.ClassID,
+		TeacherID:         claims.UserID,
+		Title:             body.Title,
+		Settings:          body.Settings,
+		MaxConcurrentLive: maxConcurrentLive,
+		TopicIDs:          topicIDs,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrConcurrentSessionLimit) {
+			writeError(w, http.StatusTooManyRequests, "Too many live ad-hoc sessions for this user")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
@@ -983,25 +982,6 @@ func (h *SessionHandler) isInstructor(r *http.Request, classID, userID string) (
 	}
 	for _, m := range members {
 		if m.UserID == userID && m.Role == "instructor" {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (h *SessionHandler) isTeacherOrOrgAdmin(r *http.Request, userID string) (bool, error) {
-	if h.Orgs == nil {
-		return false, errors.New("org store unavailable")
-	}
-	memberships, err := h.Orgs.GetUserMemberships(r.Context(), userID)
-	if err != nil {
-		return false, err
-	}
-	for _, m := range memberships {
-		if m.Status != "active" || m.OrgStatus != "active" {
-			continue
-		}
-		if m.Role == "teacher" || m.Role == "org_admin" {
 			return true, nil
 		}
 	}

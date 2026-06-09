@@ -14,12 +14,13 @@ import (
 	"github.com/lib/pq"
 )
 
-// Sentinel errors for token-based session join and direct-add.
+// Sentinel errors for session operations.
 var (
-	ErrTokenNotFound = errors.New("invite token not found")
-	ErrTokenExpired  = errors.New("invite token expired")
-	ErrSessionEnded  = errors.New("session has ended")
-	ErrUserNotFound  = errors.New("user not found")
+	ErrTokenNotFound          = errors.New("invite token not found")
+	ErrTokenExpired           = errors.New("invite token expired")
+	ErrSessionEnded           = errors.New("session has ended")
+	ErrUserNotFound           = errors.New("user not found")
+	ErrConcurrentSessionLimit = errors.New("concurrent live session limit reached")
 )
 
 type LiveSession struct {
@@ -78,10 +79,13 @@ type SessionTopicWithDetails struct {
 }
 
 type CreateSessionInput struct {
-	ClassID   *string `json:"classId"`
-	TeacherID string  `json:"teacherId"`
-	Title     string  `json:"title"`
-	Settings  string  `json:"settings"`
+	ClassID *string `json:"classId"`
+	// TeacherID is the session host. Since plan 090, this may be any
+	// authenticated user, not necessarily a teacher-role user.
+	TeacherID         string `json:"teacherId"`
+	Title             string `json:"title"`
+	Settings          string `json:"settings"`
+	MaxConcurrentLive int    `json:"-"`
 	// Plan 048 phase 1: TopicIDs is the agenda snapshot for the new
 	// session. Empty/nil = no snapshot (ad-hoc session, or class-bound
 	// session with no course topics). Non-empty = bulk-insert into
@@ -146,6 +150,26 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 		return nil, err
 	}
 	defer tx.Rollback()
+
+	if input.MaxConcurrentLive > 0 && input.ClassID == nil {
+		lockKey := "session_create:" + input.TeacherID
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
+			return nil, err
+		}
+
+		var liveCount int
+		err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM sessions
+			 WHERE teacher_id = $1 AND status = 'live' AND class_id IS NULL`,
+			input.TeacherID,
+		).Scan(&liveCount)
+		if err != nil {
+			return nil, err
+		}
+		if liveCount >= input.MaxConcurrentLive {
+			return nil, ErrConcurrentSessionLimit
+		}
+	}
 
 	now := time.Now()
 	if input.ClassID != nil {
