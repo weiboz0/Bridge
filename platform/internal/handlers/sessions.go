@@ -481,49 +481,25 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ended)
 }
 
-// canJoinSession reports whether the caller may join this session.
-//
-// Plan 043 Phase 1 P0: pre-043, JoinSession added any authenticated caller
-// as a participant. Now access requires one of:
-//
-//   - admin equivalence (IsPlatformAdmin || ImpersonatedBy != "")
-//   - Class membership in the session's owning class
-//   - A pre-existing session_participants row with status `invited` or
-//     `present` (pre-invited via AddParticipant or token). Status `left`
-//     does NOT grant re-entry — a kicked or left student must be re-invited
-//   - For class-less sessions, only the session teacher (or admin) may join
-//
-// Returns (0, "") if authorized, or an http status + message to write
-// otherwise. The same logic is reused by GetStudentPage so the page can
-// load before the join POST runs.
+// canJoinSession reports whether the caller may join, stream events for, or
+// raise/lower their hand in this session. Admin-equivalent callers bypass the
+// store gate; all other access decisions are delegated to CanAccessSession so
+// class-bound membership, class-less participant access, and ended-session
+// handling share one canonical policy.
 func (h *SessionHandler) canJoinSession(r *http.Request, session *store.LiveSession, claims *auth.Claims) (int, string) {
 	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
 		return 0, ""
 	}
 
-	if session.ClassID == nil {
-		if session.TeacherID == claims.UserID {
-			return 0, ""
-		}
-		return http.StatusForbidden, "Not authorized"
-	}
-
-	if h.Classes != nil {
-		members, err := h.Classes.ListClassMembers(r.Context(), *session.ClassID)
-		if err != nil {
-			return http.StatusInternalServerError, "Database error"
-		}
-		for _, m := range members {
-			if m.UserID == claims.UserID {
-				return 0, ""
-			}
-		}
-	}
-
-	if existing, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID); err != nil {
+	allowed, reason, err := h.Sessions.CanAccessSession(r.Context(), session.ID, claims.UserID)
+	if err != nil {
 		return http.StatusInternalServerError, "Database error"
-	} else if existing != nil && (existing.Status == "invited" || existing.Status == "present") {
+	}
+	if allowed {
 		return 0, ""
+	}
+	if reason == "ended" {
+		return http.StatusGone, "Session has ended"
 	}
 
 	return http.StatusForbidden, "Not authorized"
@@ -547,11 +523,6 @@ func (h *SessionHandler) JoinSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if session.Status != "live" {
-		writeError(w, http.StatusBadRequest, "Session has ended")
-		return
-	}
-
 	if status, msg := h.canJoinSession(r, session, claims); status != 0 {
 		writeError(w, status, msg)
 		return
@@ -832,7 +803,7 @@ func (h *SessionHandler) GetSessionTopics(w http.ResponseWriter, r *http.Request
 
 	// Plan 043 Phase 1 P0: gate by class membership. Resolve the class
 	// via the session, then defer to canAccessClass. Class-less sessions
-	// (rare) only the teacher or admin may inspect.
+	// allow teacher/admin-equivalent callers and invited/present participants.
 	session, err := h.Sessions.GetSession(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -854,8 +825,15 @@ func (h *SessionHandler) GetSessionTopics(w http.ResponseWriter, r *http.Request
 			}
 		}
 	} else if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" && session.TeacherID != claims.UserID {
-		writeError(w, http.StatusNotFound, "Not found")
-		return
+		participant, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if participant == nil || (participant.Status != "invited" && participant.Status != "present") {
+			writeError(w, http.StatusNotFound, "Not found")
+			return
+		}
 	}
 
 	topics, err := h.Sessions.GetSessionTopics(r.Context(), sessionID)

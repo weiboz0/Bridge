@@ -64,6 +64,7 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		Topics:      store.NewTopicStore(db),
 		Chapters:    store.NewChapterStore(db),
 		Orgs:        orgs,
+		ParentLinks: store.NewParentLinkStore(db),
 		Broadcaster: broadcaster,
 	}
 
@@ -90,6 +91,7 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN (SELECT id FROM sessions WHERE teacher_id = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM sessions WHERE teacher_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 		})
@@ -387,6 +389,130 @@ func TestSessionHandler_ListSessions_ClassFilterOnlyReturnsClassLinkedSessions(t
 		require.NotNil(t, item.ClassID)
 		assert.Equal(t, fx.classID, *item.ClassID)
 	}
+}
+
+// ------------------- Phase 2 class-less access consistency -------------------
+
+func TestSessionHandler_JoinSession_OrphanInvitedParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc invited join",
+	})
+	_, err := fx.h.Sessions.AddParticipant(ctx, session.ID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	participant, err := fx.h.Sessions.GetSessionParticipant(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, participant)
+	assert.Equal(t, "present", participant.Status)
+}
+
+func TestSessionHandler_JoinSession_OrphanPresentParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc present join",
+	})
+	_, err := fx.h.Sessions.JoinSession(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_JoinSession_OrphanLeftParticipantDenied(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc left join",
+	})
+	_, err := fx.h.Sessions.JoinSession(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.LeaveSession(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_GetSessionTopics_OrphanParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc topics participant",
+	})
+	_, err := fx.h.Sessions.AddParticipant(ctx, session.ID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/topics", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var topics []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &topics))
+}
+
+func TestSessionHandler_GetSessionTopics_OrphanRandomUserDenied(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc topics outsider",
+	})
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/topics", nil, fx.claims(fx.otherUser, false))
+	assert.Contains(t, []int{http.StatusNotFound, http.StatusForbidden}, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_JoinSession_OrphanEndedSessionGone(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc ended join",
+	})
+	_, err := fx.h.Sessions.AddParticipant(ctx, session.ID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.EndSession(ctx, session.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusGone, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_JoinSession_ClassBoundBehaviorUnchanged(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	_, err := fx.classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: fx.classID,
+		UserID:  fx.student.ID,
+		Role:    "student",
+	})
+	require.NoError(t, err)
+
+	member := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/join", nil, fx.claims(fx.student, false))
+	assert.Equal(t, http.StatusOK, member.Code, "body=%s", member.Body.String())
+
+	outsider := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, outsider.Code, "body=%s", outsider.Body.String())
+}
+
+func TestSessionHandler_GetSessionTopics_ClassBoundParentOfParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	_, err := fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	_, err = fx.h.ParentLinks.CreateLink(ctx, fx.otherUser.ID, fx.student.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 }
 
 // ------------------- PATCH /api/sessions/{id} -------------------
