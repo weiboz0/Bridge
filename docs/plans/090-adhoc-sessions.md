@@ -76,7 +76,10 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 
 ## Phases
 
-### Phase 1 — Backend: any-user host + abuse cap *(Codex)*
+### Phase 1 — Backend: any-user host + abuse cap *(Codex)* — ✅ COMPLETE (`9463784`)
+
+> Deviation: concurrent cap scoped to class-less live sessions (`class_id IS NULL`) rather than all of a host's live sessions, so multi-class teachers aren't penalised (class-bound create already self-limits). Verified: 6 new integration tests pass; full handlers+store suite green against `bridge_test` (166s / 30s).
+
 - Relax class-less create gate (Decision 1). Keep class-bound + admin paths intact.
 - Add concurrent-live cap per host (Decision 3): new store count method, 429 on exceed, admin-exempt.
 - Comment `teacher_id` as host (Decision 2).
