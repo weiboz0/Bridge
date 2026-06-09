@@ -44,7 +44,7 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 
 5. **`canJoinSession` consistency fix.** Restructure the class-less branch (`sessions.go:505-510`) so it does NOT early-return 403. Order for a class-less session becomes: admin/impersonator → host (`TeacherID`) → participant row `invited`/`present` → **`visibility=='public'` ⇒ allow open self-join** → else 403. For public open-join, `JoinSession` inserts a `present` participant row (idempotent). This single fix unblocks the regular join POST, SSE stream, and help-queue for ad-hoc guests, and enables browse-then-join. Class-bound behavior is unchanged.
 
-5a. **Mirror the fix in store-level `CanAccessSession`** (Codex finding). `GET /api/sessions/{id}` gates on a *separate* check — handler `sessions.go:409-442` backed by `store/sessions.go:687-743` — not on `canJoinSession`. It has the same class-less limitation. Apply the identical fall-through (participant row, then `visibility=='public'`) there, or browse/link users hit inconsistent 404s on the session detail fetch. Both checks must agree; a shared helper is preferred over two parallel edits.
+5a. **Mirror the fix in store-level `CanAccessSession`** (Codex finding). `GET /api/sessions/{id}` gates on a *separate* check — handler `sessions.go:409-442` backed by `store/sessions.go:687-743` — not on `canJoinSession`. It has the same class-less limitation. **Required:** the class-less fall-through (participant row, then `visibility=='public'`) MUST be applied there as well — browse/link users would otherwise hit inconsistent 404s on the detail fetch. **The two checks MUST share a single helper** (not two parallel edits) so the access policy cannot drift; Phase 2 introduces that helper and routes both `canJoinSession` and `CanAccessSession` through it.
 
 5b. **`GetSessionTopics` regression** (Codex finding). `GetSessionTopics` (`sessions.go:834-860`) restricts class-less callers to teacher/admin, so an ad-hoc guest 404s if the student room fetches topics (`src/components/session/student/student-session.tsx`). Relax it to also allow a `present`/`invited` participant (read-only) for class-less sessions, consistent with the fixes above. Add to Phase 2.
 
@@ -85,7 +85,7 @@ A pre-implementation audit (the three Gap-5 sweeps recorded below) found the dat
 ### Phase 2 — Backend: class-less access consistency fixes *(Codex)*
 Consolidates ALL the class-less access-check fixes (no `visibility` yet — that's Phase 3 — to isolate the bugfix from the feature):
 - Restructure `canJoinSession` class-less branch (Decision 5) to fall through to the participant-row check.
-- Apply the same fall-through to store-level `CanAccessSession` (Decision 5a) — ideally via one shared helper so the two never drift.
+- Apply the same fall-through to store-level `CanAccessSession` (Decision 5a) **via one shared helper** that both `canJoinSession` and `CanAccessSession` call — single source of truth, no drift.
 - Relax `GetSessionTopics` for class-less `present`/`invited` participants (Decision 5b).
 - Verify SSE (`SessionEvents`), `ToggleHelp`, and session-detail `GET /{id}` now work for an invited/present ad-hoc guest.
 - Tests: ad-hoc invited guest passes `canJoinSession` AND `CanAccessSession` AND `GetSessionTopics`; raises hand; subscribes to SSE; `left` status still denied; class-bound matrix unchanged (table-driven, both class-bound and class-less rows).
@@ -122,7 +122,7 @@ Must land BEFORE the frontend route (Codex ordering finding — the neutral shel
 - **`canJoinSession` is load-bearing.** It gates join, SSE, help-queue, and is referenced by page loaders. The restructure (Phase 2) must preserve every class-bound path exactly. Mitigation: phase the bugfix separately from the visibility clause; table-driven tests for both class-bound and class-less matrices before and after.
 - **Enum migration on a hot column.** Adding an enum + column is additive and backfills to default; low risk. Verify the TS schema mirror and any `SELECT *`/scan ordering in `store/sessions.go` are updated together (a missed scan column is the classic break).
 - **Route duplication / drift.** Three session route trees (`/teacher`, `/student`, `/sessions`) risk divergence. Mitigation: the neutral routes reuse the existing `TeacherDashboard`/`StudentSession` components rather than forking them; portal routes become thin entry points.
-- **me.go routing change.** Changing primaryPortalPath risks redirect loops for edge identities. Mitigation: only reroute zero-role users who have session history; keep `/onboarding` for brand-new users; explicit test.
+- **Role-neutral admission change.** Admitting zero-role users to the neutral `/sessions` subtree (Phase 4) risks redirect loops if `portal-access`/`PortalShell`/middleware disagree on who's allowed. Mitigation: `primaryPortalPath` is unchanged (brand-new zero-role users still land on `/onboarding` — no history heuristic, per Decision 9); only the neutral-subtree admission check is relaxed to "any authenticated user"; role-specific portals keep their gates; explicit test for a zero-role user reaching `/sessions` without bouncing.
 - **Participant-count query cost** on the browse endpoint. Mitigation: bounded page size + index on `session_participants(session_id, status)` (verify it exists; add if not).
 
 ## Plan Review
@@ -145,9 +145,15 @@ Must land BEFORE the frontend route (Codex ordering finding — the neutral shel
 
 All findings folded; no open blockers. **Round 2 below re-confirms with Codex against the revised plan.**
 
-### Round 2 — Codex re-confirm
+### Round 2 — Codex re-confirm, 2026-06-08
 
-_(pending — dispatched against the revised plan)_
+**Codex — APPROVE WITH CHANGES.** Confirmed findings 2–6 fully resolved. Two doc-consistency items, both folded:
+- *Finding 1 (store-level `CanAccessSession`) used soft "preferred/ideally" language.* → **Resolved:** Decision 5a + Phase 2 now make the shared single-helper mandatory ("MUST share a single helper").
+- *New: Risks still described the dropped session-history rerouting, contradicting Decision 9.* → **Resolved:** Risks "Role-neutral admission" bullet rewritten to match (primaryPortalPath unchanged, only neutral-subtree admission relaxed).
+
+### Verdict — APPROVED FOR IMPLEMENTATION
+
+Both reviewers concur. Self-review: APPROVE. Codex: APPROVE (Round-2 changes were trivial doc-alignment, now applied — no design questions remain open). No open blockers. Implementation may begin on `feat/090-adhoc-sessions`.
 
 ## Code Review
 
