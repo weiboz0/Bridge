@@ -96,7 +96,11 @@ Consolidates ALL the class-less access-check fixes (no `visibility` yet — that
 - Verify SSE (`SessionEvents`), `ToggleHelp`, and session-detail `GET /{id}` now work for an invited/present ad-hoc guest.
 - Tests: ad-hoc invited guest passes `canJoinSession` AND `CanAccessSession` AND `GetSessionTopics`; raises hand; subscribes to SSE; `left` status still denied; class-bound matrix unchanged (table-driven, both class-bound and class-less rows).
 
-### Phase 3 — Backend: visibility + browse + public open-join *(Codex)*
+### Phase 3 — Backend: visibility + browse + public open-join *(Codex)* — ✅ COMPLETE (`8503aaa`)
+
+> Migration `0027` applied to `bridge` + `bridge_test` (psql -f; drizzle journal isn't the runtime applier). No `migrations.go` change (0027 has no CREATE TABLE → probe stays on 0026; parity test confirms). Two regressions from the `sessionColumns` change were caught by the suite and fixed in-phase: `StartScheduledSession` scan (the one session scan outside `sessions.go`) and `JoinSession` idempotency guard (also now lets a `left` user rejoin a public session). Verified: 9 new tests + full handlers/store/db suites green.
+
+
 - Migration: `session_visibility` enum + `sessions.visibility` column default `'unlisted'`, AND the `session_participants(session_id, status)` composite index (Decision 6). Regenerate drizzle. Update `store/sessions.go` scan/insert **and verify column scan order** (Codex: scan at ~110-117 is positional and fragile) and the TS schema mirror (`src/lib/db/schema.ts` ~227-253, which has no visibility column today).
 - `CreateSession` accepts optional `visibility`; `PatchSession` accepts `visibility` (host/admin only) — Decision 7.
 - `canJoinSession` + `CanAccessSession`: add the `visibility=='public'` open-join clause (Decision 5/5a); `JoinSession` idempotent-inserts a `present` row for public open-join.
