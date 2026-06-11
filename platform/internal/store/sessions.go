@@ -34,6 +34,7 @@ type LiveSession struct {
 	InviteExpiresAt *time.Time `json:"inviteExpiresAt,omitempty"`
 	StartedAt       time.Time  `json:"startedAt"`
 	EndedAt         *time.Time `json:"endedAt"`
+	Visibility      string     `json:"visibility"`
 }
 
 type SessionParticipant struct {
@@ -85,6 +86,7 @@ type CreateSessionInput struct {
 	TeacherID         string `json:"teacherId"`
 	Title             string `json:"title"`
 	Settings          string `json:"settings"`
+	Visibility        string `json:"visibility"`
 	MaxConcurrentLive int    `json:"-"`
 	// Plan 048 phase 1: TopicIDs is the agenda snapshot for the new
 	// session. Empty/nil = no snapshot (ad-hoc session, or class-bound
@@ -111,13 +113,13 @@ func NewSessionStore(db *sql.DB) *SessionStore {
 	return &SessionStore{db: db}
 }
 
-const sessionColumns = `id, class_id, teacher_id, title, status, settings, invite_token, invite_expires_at, started_at, ended_at`
+const sessionColumns = `id, class_id, teacher_id, title, status, settings, invite_token, invite_expires_at, started_at, ended_at, visibility`
 const participantColumns = `session_id, user_id, status, invited_by, invited_at, joined_at, left_at, help_requested_at`
 
 func scanSession(row interface{ Scan(...any) error }) (*LiveSession, error) {
 	var s LiveSession
 	err := row.Scan(&s.ID, &s.ClassID, &s.TeacherID, &s.Title, &s.Status, &s.Settings,
-		&s.InviteToken, &s.InviteExpiresAt, &s.StartedAt, &s.EndedAt)
+		&s.InviteToken, &s.InviteExpiresAt, &s.StartedAt, &s.EndedAt, &s.Visibility)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -187,15 +189,22 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	if settings == "" {
 		settings = "{}"
 	}
+	visibility := input.Visibility
+	if visibility == "" {
+		visibility = "unlisted"
+	}
+	if visibility != "unlisted" && visibility != "public" {
+		return nil, fmt.Errorf("unsupported session visibility %q", visibility)
+	}
 
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at)
-		 VALUES ($1, $2, $3, $4, 'live', $5, $6)
+		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at, visibility)
+		 VALUES ($1, $2, $3, $4, 'live', $5, $6, $7)
 		 RETURNING `+sessionColumns,
-		id, input.ClassID, input.TeacherID, input.Title, settings, now,
+		id, input.ClassID, input.TeacherID, input.Title, settings, now, visibility,
 	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Title, &session.Status, &session.Settings,
-		&session.InviteToken, &session.InviteExpiresAt, &session.StartedAt, &session.EndedAt)
+		&session.InviteToken, &session.InviteExpiresAt, &session.StartedAt, &session.EndedAt, &session.Visibility)
 	if err != nil {
 		return nil, err
 	}
@@ -334,11 +343,19 @@ type SessionWithParticipantCount struct {
 	ParticipantCount int `json:"participantCount"`
 }
 
+type PublicSessionListItem struct {
+	ID               string    `json:"id"`
+	Title            string    `json:"title"`
+	HostName         string    `json:"hostName"`
+	ParticipantCount int       `json:"participantCount"`
+	StartedAt        time.Time `json:"startedAt"`
+}
+
 // ListSessionsWithCounts returns sessions with participant counts.
 func (s *SessionStore) ListSessionsWithCounts(ctx context.Context, classID string) ([]SessionWithParticipantCount, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT ls.id, ls.class_id, ls.teacher_id, ls.title, ls.status, ls.settings,
-		        ls.invite_token, ls.invite_expires_at, ls.started_at, ls.ended_at,
+		        ls.invite_token, ls.invite_expires_at, ls.started_at, ls.ended_at, ls.visibility,
 		        COALESCE((SELECT count(*) FROM session_participants sp WHERE sp.session_id = ls.id), 0)
 		 FROM sessions ls
 		 WHERE ls.class_id = $1
@@ -352,7 +369,7 @@ func (s *SessionStore) ListSessionsWithCounts(ctx context.Context, classID strin
 	for rows.Next() {
 		var s SessionWithParticipantCount
 		if err := rows.Scan(&s.ID, &s.ClassID, &s.TeacherID, &s.Title, &s.Status, &s.Settings,
-			&s.InviteToken, &s.InviteExpiresAt, &s.StartedAt, &s.EndedAt, &s.ParticipantCount); err != nil {
+			&s.InviteToken, &s.InviteExpiresAt, &s.StartedAt, &s.EndedAt, &s.Visibility, &s.ParticipantCount); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, s)
@@ -368,6 +385,7 @@ type UpdateSessionInput struct {
 	Title           *string    `json:"title"`
 	Settings        *string    `json:"settings"`
 	InviteExpiresAt *time.Time `json:"inviteExpiresAt"`
+	Visibility      *string    `json:"visibility"`
 	// ClearInviteExpiry is true when the caller explicitly sets inviteExpiresAt to null.
 	ClearInviteExpiry bool `json:"-"`
 }
@@ -375,10 +393,14 @@ type UpdateSessionInput struct {
 // UpdateSession performs a partial update on the mutable session fields
 // (title, settings, invite_expires_at). Only non-nil fields are applied.
 func (s *SessionStore) UpdateSession(ctx context.Context, id string, input UpdateSessionInput) (*LiveSession, error) {
+	if input.Visibility != nil && *input.Visibility != "unlisted" && *input.Visibility != "public" {
+		return nil, fmt.Errorf("unsupported session visibility %q", *input.Visibility)
+	}
 	return scanSession(s.db.QueryRowContext(ctx,
 		`UPDATE sessions SET
 			title = COALESCE($1, title),
 			settings = COALESCE($2, settings),
+			visibility = COALESCE($6::session_visibility, visibility),
 			invite_expires_at = CASE
 				WHEN $4 THEN NULL
 				WHEN $3::timestamptz IS NOT NULL THEN $3
@@ -387,7 +409,49 @@ func (s *SessionStore) UpdateSession(ctx context.Context, id string, input Updat
 			updated_at = now()
 		 WHERE id = $5
 		 RETURNING `+sessionColumns,
-		input.Title, input.Settings, input.InviteExpiresAt, input.ClearInviteExpiry, id))
+		input.Title, input.Settings, input.InviteExpiresAt, input.ClearInviteExpiry, id, input.Visibility))
+}
+
+func (s *SessionStore) ListPublicSessions(ctx context.Context, limit int, cursorStartedAt *time.Time, cursorID *string) ([]PublicSessionListItem, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	args := []any{}
+	where := `WHERE ls.status = 'live' AND ls.visibility = 'public'`
+	if cursorStartedAt != nil && cursorID != nil {
+		where += ` AND (ls.started_at, ls.id) < ($1, $2)`
+		args = append(args, *cursorStartedAt, *cursorID)
+	}
+
+	q := fmt.Sprintf(
+		`SELECT ls.id, ls.title, u.name,
+		        COALESCE(count(sp.user_id) FILTER (WHERE sp.status = 'present'), 0),
+		        ls.started_at
+		 FROM sessions ls
+		 INNER JOIN users u ON u.id = ls.teacher_id
+		 LEFT JOIN session_participants sp ON sp.session_id = ls.id
+		 %s
+		 GROUP BY ls.id, ls.title, u.name, ls.started_at
+		 ORDER BY ls.started_at DESC, ls.id DESC
+		 LIMIT %d`,
+		where, limit,
+	)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []PublicSessionListItem{}
+	for rows.Next() {
+		var item PublicSessionListItem
+		if err := rows.Scan(&item.ID, &item.Title, &item.HostName, &item.ParticipantCount, &item.StartedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {
@@ -400,17 +464,25 @@ func (s *SessionStore) JoinSession(ctx context.Context, sessionID, studentID str
 	// Plan 043 Codex post-impl review: a pre-invited row (status='invited',
 	// joined_at=NULL) was previously left untouched because of
 	// ON CONFLICT DO NOTHING. Now: invited → present and joined_at gets set
-	// so the teacher's roster reflects the actual join. Already-present
-	// rows are left alone (the user is just re-asserting). 'left' rows
-	// remain rejected by the handler-level canJoinSession gate before we
-	// reach this query — they need a fresh invite to come back.
+	// so the teacher's roster reflects the actual join.
+	//
+	// Plan 090: a 'left' row also flips back to 'present' (left_at cleared)
+	// so a public open-join re-entrant can rejoin (canJoinSession already
+	// authorized them — class-less non-public 'left' users are rejected
+	// upstream, so this query is only reached when re-entry is allowed).
+	//
+	// The DO UPDATE WHERE clause is load-bearing: an already-'present' row
+	// matches no WHERE branch, so no row is updated and RETURNING yields
+	// nothing → scanParticipant returns nil. The handler relies on this nil
+	// to NOT re-emit a "student_joined" event on a duplicate join.
 	return scanParticipant(s.db.QueryRowContext(ctx,
 		`INSERT INTO session_participants (session_id, user_id, status, joined_at)
 		 VALUES ($1, $2, 'present', $3)
 		 ON CONFLICT (session_id, user_id) DO UPDATE
 		   SET status = 'present',
-		       joined_at = COALESCE(session_participants.joined_at, EXCLUDED.joined_at)
-		   WHERE session_participants.status = 'invited'
+		       joined_at = COALESCE(session_participants.joined_at, EXCLUDED.joined_at),
+		       left_at = NULL
+		   WHERE session_participants.status IN ('invited', 'left')
 		 RETURNING `+participantColumns,
 		sessionID, studentID, time.Now(),
 	))
@@ -712,11 +784,11 @@ func (s *SessionStore) RevokeInviteToken(ctx context.Context, sessionID string) 
 // Returns (allowed, reason, err) where reason is one of:
 // "teacher", "class_member", "participant", "not_found", "ended", "no_access".
 func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID string) (bool, string, error) {
-	var status, teacherID string
+	var status, teacherID, visibility string
 	var classID *string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT status, teacher_id, class_id FROM sessions WHERE id = $1`, sessionID,
-	).Scan(&status, &teacherID, &classID)
+		`SELECT status, teacher_id, class_id, visibility FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&status, &teacherID, &classID, &visibility)
 	if err == sql.ErrNoRows {
 		return false, "not_found", nil
 	}
@@ -762,6 +834,10 @@ func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID s
 	}
 	if participantExists {
 		return true, "participant", nil
+	}
+
+	if status == "live" && visibility == "public" {
+		return true, "public", nil
 	}
 
 	return false, "no_access", nil

@@ -44,10 +44,16 @@ type sessionListResponse struct {
 	NextCursor *string             `json:"nextCursor,omitempty"`
 }
 
+type publicSessionListResponse struct {
+	Items      []store.PublicSessionListItem `json:"items"`
+	NextCursor *string                       `json:"nextCursor,omitempty"`
+}
+
 func (h *SessionHandler) Routes(r chi.Router) {
 	r.Route("/api/sessions", func(r chi.Router) {
 		r.Get("/", h.ListSessions)
 		r.Post("/", h.CreateSession)
+		r.Get("/public", h.ListPublicSessions)
 		r.Get("/by-class/{classId}", h.ListByClass)
 		r.Get("/active/{classId}", h.GetActiveByClass)
 		r.Route("/{id}", func(r chi.Router) {
@@ -103,6 +109,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		Title                 string  `json:"title"`
 		ClassID               *string `json:"classId"`
 		Settings              string  `json:"settings"`
+		Visibility            string  `json:"visibility"`
 		ConfirmUnlinkedTopics bool    `json:"confirmUnlinkedTopics,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -110,6 +117,10 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Title == "" {
 		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if !validSessionVisibility(body.Visibility, true) {
+		writeError(w, http.StatusBadRequest, "visibility must be unlisted or public")
 		return
 	}
 
@@ -171,6 +182,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		TeacherID:         claims.UserID,
 		Title:             body.Title,
 		Settings:          body.Settings,
+		Visibility:        body.Visibility,
 		MaxConcurrentLive: maxConcurrentLive,
 		TopicIDs:          topicIDs,
 	})
@@ -277,6 +289,43 @@ func parseSessionListFilterFromQuery(r *http.Request) (store.ListSessionsFilter,
 	return f, nil
 }
 
+func parsePublicSessionListQuery(r *http.Request) (int, *time.Time, *string, error) {
+	q := r.URL.Query()
+	limit := 20
+	if rawLimit := q.Get("limit"); rawLimit != "" {
+		n, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return 0, nil, nil, errors.New("limit must be an integer")
+		}
+		limit = n
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	var cursorStartedAt *time.Time
+	var cursorID *string
+	if cursor := q.Get("cursor"); cursor != "" {
+		startedAt, id, err := decodeCursor(cursor)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		cursorStartedAt = startedAt
+		cursorID = id
+	}
+	return limit, cursorStartedAt, cursorID, nil
+}
+
+func validSessionVisibility(visibility string, allowEmpty bool) bool {
+	if visibility == "" {
+		return allowEmpty
+	}
+	return visibility == "unlisted" || visibility == "public"
+}
+
 // ListSessions handles GET /api/sessions?teacherId=&classId=&status=&limit=&cursor=
 func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -313,6 +362,40 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, sessionListResponse{
 		Items:      sessions,
+		NextCursor: nextCursor,
+	})
+}
+
+// ListPublicSessions handles GET /api/sessions/public?limit=&cursor=
+func (h *SessionHandler) ListPublicSessions(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	limit, cursorStartedAt, cursorID, err := parsePublicSessionListQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid query: "+err.Error())
+		return
+	}
+
+	items, err := h.Sessions.ListPublicSessions(r.Context(), limit+1, cursorStartedAt, cursorID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	var nextCursor *string
+	if len(items) > limit {
+		items = items[:limit]
+		last := items[len(items)-1]
+		cursor := encodeCursor(last.StartedAt, last.ID)
+		nextCursor = &cursor
+	}
+
+	writeJSON(w, http.StatusOK, publicSessionListResponse{
+		Items:      items,
 		NextCursor: nextCursor,
 	})
 }
@@ -1197,15 +1280,21 @@ func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title           *string         `json:"title"`
 		Settings        *string         `json:"settings"`
+		Visibility      *string         `json:"visibility"`
 		InviteExpiresAt json.RawMessage `json:"inviteExpiresAt,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
+	if body.Visibility != nil && !validSessionVisibility(*body.Visibility, false) {
+		writeError(w, http.StatusBadRequest, "visibility must be unlisted or public")
+		return
+	}
 
 	input := store.UpdateSessionInput{
-		Title:    body.Title,
-		Settings: body.Settings,
+		Title:      body.Title,
+		Settings:   body.Settings,
+		Visibility: body.Visibility,
 	}
 
 	// Parse inviteExpiresAt: present string → set, JSON null → clear, absent → leave unchanged.

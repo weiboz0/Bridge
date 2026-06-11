@@ -256,7 +256,7 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 		sessionID, sched.ClassID, teacherID, now, sched.Title, sched.ID,
 	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Title, &session.Status,
 		&session.Settings, &session.InviteToken, &session.InviteExpiresAt,
-		&session.StartedAt, &session.EndedAt)
+		&session.StartedAt, &session.EndedAt, &session.Visibility)
 	if err != nil {
 		return nil, err
 	}
