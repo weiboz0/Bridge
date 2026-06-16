@@ -142,7 +142,7 @@ func Load(path string) (*Config, error) {
 
 	// Resolve LLM API key from provider-specific env var
 	cfg.LLM.APIKey = resolveLLMAPIKey(cfg.LLM.Backend)
-	if v := os.Getenv("GO_PORT"); v != "" {
+	if v := os.Getenv("PLATFORM_PORT"); v != "" {
 		fmt.Sscanf(v, "%d", &cfg.Server.Port)
 	}
 

@@ -19,7 +19,30 @@ import { rechckDocumentAccess, verifyRealtimeJwt } from "./realtime-jwt";
 //   default value under BRIDGE_HOST_EXPOSURE=exposed.
 const TOKEN_SECRET = process.env.HOCUSPOCUS_TOKEN_SECRET ?? "";
 const BRIDGE_HOST_EXPOSURE = (process.env.BRIDGE_HOST_EXPOSURE ?? "").toLowerCase().trim();
-const GO_INTERNAL_API_URL = process.env.GO_INTERNAL_API_URL ?? "http://localhost:8002";
+// For local dev the Go port alone (PLATFORM_PORT, default 8002) is enough — the
+// internal URL is derived from it. Set GO_INTERNAL_API_URL explicitly to reach
+// a non-localhost Go API (e.g. when Hocuspocus runs on a different host).
+const GO_DEFAULT_INTERNAL_URL = `http://localhost:${process.env.PLATFORM_PORT ?? "8002"}`;
+const GO_INTERNAL_API_URL = process.env.GO_INTERNAL_API_URL ?? GO_DEFAULT_INTERNAL_URL;
+
+// HOCUSPOCUS_PORT: TCP port the collaboration server listens on. Defaults to
+// 4000; override via .env. An invalid / out-of-range value aborts boot rather
+// than silently binding the wrong port (which would surface only as failed
+// browser WebSocket connections later).
+function parseHocuspocusPort(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") {
+    return 4000;
+  }
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(
+      `[hocuspocus] refusing to start: HOCUSPOCUS_PORT=${JSON.stringify(raw)} is not a valid TCP port (1-65535).`
+    );
+    process.exit(1);
+  }
+  return port;
+}
+const HOCUSPOCUS_PORT = parseHocuspocusPort(process.env.HOCUSPOCUS_PORT);
 
 function validateRealtimeAuthEnv(): void {
   // Plan 072 phase 2 — JWT-only boot check. TOKEN_SECRET is required; no
@@ -49,9 +72,9 @@ function validateRealtimeAuthEnv(): void {
 
   // Operational warning: GO_INTERNAL_API_URL default localhost in an
   // exposed environment will make every onLoadDocument recheck fail.
-  if (isExposed && GO_INTERNAL_API_URL === "http://localhost:8002") {
+  if (isExposed && GO_INTERNAL_API_URL === GO_DEFAULT_INTERNAL_URL) {
     console.warn(
-      "[hocuspocus] WARNING: GO_INTERNAL_API_URL is the default http://localhost:8002 in a BRIDGE_HOST_EXPOSURE=exposed environment. Realtime document loads will fail unless this points at a reachable Go API. Set GO_INTERNAL_API_URL explicitly."
+      `[hocuspocus] WARNING: GO_INTERNAL_API_URL is the localhost default (${GO_DEFAULT_INTERNAL_URL}) in a BRIDGE_HOST_EXPOSURE=exposed environment. Realtime document loads will fail unless this points at a reachable Go API. Set GO_INTERNAL_API_URL explicitly.`
     );
   }
 
@@ -69,7 +92,7 @@ interface AuthContext {
 }
 
 const server = new Server({
-  port: 4000,
+  port: HOCUSPOCUS_PORT,
   debounce: 30000, // Save to DB every 30 seconds (also saves on disconnect)
 
   async onAuthenticate({ token, documentName }: { token: string; documentName: string }) {

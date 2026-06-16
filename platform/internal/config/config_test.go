@@ -22,7 +22,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	t.Setenv("LLM_BACKEND", "anthropic")
 	t.Setenv("LLM_MODEL", "claude-3")
 	t.Setenv("LLM_BASE_URL", "https://api.anthropic.com")
-	t.Setenv("GO_PORT", "9999")
+	t.Setenv("PLATFORM_PORT", "9999")
 
 	cfg, err := Load("")
 	require.NoError(t, err)
