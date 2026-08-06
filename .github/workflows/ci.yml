@@ -1,0 +1,157 @@
+name: ci
+
+# The gate that licenses auto-merge.
+#
+# The rule this file exists to satisfy: CI must not be a REIMPLEMENTATION of the
+# local gate. If it were, the two would drift, and GitHub would auto-merge on a
+# green signal that never ran the collision guards or the semantic-break check.
+# So the `gate` job shells out to scripts/ci-local.sh — the same script developers
+# run — rather than re-listing its steps here.
+#
+# Coverage split: `gate` runs ci-local.sh --fast (lint ratchet, type-check, the five
+# collision guards, guard self-tests, vitest, go test); `e2e` runs the Playwright
+# tier that --fast omits, because it needs a booted stack that only CI provisions
+# cleanly. Together the two jobs equal a full `ci-local.sh` run. Both must be
+# required in branch protection, or the split silently becomes a gap.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  # Must end in _test — tests/helpers.ts hard-refuses anything else, because the
+  # suite truncates every table after each test.
+  PGDATABASE: bridge_test
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bridge_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_test
+      NEXTAUTH_SECRET: ci-only-not-a-real-secret
+      NEXTAUTH_URL: http://localhost:3000
+      HOCUSPOCUS_TOKEN_SECRET: ci-only-not-a-real-secret
+      BRIDGE_INTERNAL_SECRET: ci-only-not-a-real-secret
+      # Provider API keys are deliberately NOT set. tests/llm/*.test.ts gate on
+      # key presence, so they skip here — CI must never bill provider calls.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+
+      - run: bun install --frozen-lockfile
+
+      - name: Apply migrations
+        # drizzle.config.ts reads DATABASE_URL and has no test-only path, which is
+        # why the job-level value points at the throwaway service container.
+        run: bun run db:migrate
+
+      - name: Gate
+        run: bash scripts/ci-local.sh --fast
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: gate
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bridge_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_test
+      NEXTAUTH_SECRET: ci-only-not-a-real-secret
+      NEXTAUTH_URL: http://localhost:3000
+      HOCUSPOCUS_TOKEN_SECRET: ci-only-not-a-real-secret
+      BRIDGE_INTERNAL_SECRET: ci-only-not-a-real-secret
+      NEXTJS_PORT: "3000"
+      PLATFORM_PORT: "8080"
+      HOCUSPOCUS_PORT: "4000"
+      # Pinned explicitly. Playwright's config falls back to :3003, which on the
+      # primary dev machine is an unrelated service — and e2e/seed.setup.ts creates
+      # classes and enrols users against whatever answers.
+      E2E_BASE_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run db:migrate
+
+      - name: Seed demo accounts
+        # e2e/auth.setup.ts signs in as the demo users in e2e/helpers.ts ACCOUNTS,
+        # so they must exist before Playwright's `seed` project runs.
+        run: |
+          psql "$DATABASE_URL" -f scripts/seed_bridge_hq.sql
+          psql "$DATABASE_URL" -f scripts/seed_problem_demo.sql
+
+      - run: bunx playwright install --with-deps chromium
+
+      - name: Build
+        run: bun run build
+
+      - name: Start stack
+        run: |
+          (cd platform && go run ./cmd/api/ &)
+          bun run hocuspocus &
+          bun run start &
+          # Wait for readiness rather than sleeping a fixed interval.
+          for i in $(seq 1 60); do
+            curl -sf "http://localhost:${NEXTJS_PORT}" >/dev/null && break
+            sleep 2
+          done
+          curl -sf "http://localhost:${NEXTJS_PORT}" >/dev/null
+
+      - name: E2E
+        run: bun run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
