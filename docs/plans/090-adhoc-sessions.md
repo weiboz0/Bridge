@@ -107,7 +107,10 @@ Consolidates ALL the class-less access-check fixes (no `visibility` yet — that
 - `ListPublicSessions` store method + `GET /api/sessions/public` handler, **registered before `/{id}`** (Decision 6).
 - Tests: default visibility `unlisted`; only `public`+`live` in browse; non-host cannot set visibility; public open-join inserts participant + idempotent; ended/unlisted excluded; pagination; the `public` literal does not hit `ValidateUUIDParam`.
 
-### Phase 4 — Backend: role-neutral admission + me.go *(Codex)*
+### Phase 4 — Backend: role-neutral admission + me.go — ✅ COMPLETE
+Implemented inline (auth-surface contract change, tightly coupled across Go + TS). **Deviation from plan text, folded after review:** rather than flipping `me.go`'s `authorized` field (which has 3 consumers — `portal-shell.tsx` + both library pages — that use it as a login gate), added a **new `authenticated` field**. `authorized` keeps its `len(roles)>0` meaning, so those consumers are byte-for-byte unchanged; the neutral shell admits on `authenticated`. Role-specific portal behavior preserved exactly. Tests: `me_test.go` no-claims → both flags false; `portal-shell.test.tsx` 9 cases (neutral admits roleless/authenticated, /login on unauthenticated, role-specific gates preserved).
+
+Original spec (kept for reference):
 Must land BEFORE the frontend route (Codex ordering finding — the neutral shell is dead without it):
 - `/api/me/portal-access` (`handlers/me.go:161-162`) + `PortalShell` (`portal-shell.tsx:46-50`): admit any authenticated user to the role-neutral (`portalRole=null`) subtree instead of requiring `len(roles)>0`. Keep per-role gating for role-specific subtrees unchanged.
 - Leave `primaryPortalPath` for brand-new zero-role users as `/onboarding` (Decision 9 — no history heuristic).

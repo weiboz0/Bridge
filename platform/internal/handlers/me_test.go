@@ -102,6 +102,21 @@ func TestGetRoles_Authenticated(t *testing.T) {
 	h.GetRoles(w, req)
 }
 
+func TestGetPortalAccess_NoClaims(t *testing.T) {
+	h := &MeHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/portal-access", nil)
+	w := httptest.NewRecorder()
+	h.GetPortalAccess(w, req)
+
+	// Unauthenticated callers get 200 with both flags false (landing-page shape,
+	// plan 090): authenticated distinguishes "no session" from "session, no roles".
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, false, body["authorized"])
+	assert.Equal(t, false, body["authenticated"])
+}
+
 func TestGetIdentity_NoClaims(t *testing.T) {
 	h := &MeHandler{}
 	req := httptest.NewRequest(http.MethodGet, "/api/me/identity", nil)
