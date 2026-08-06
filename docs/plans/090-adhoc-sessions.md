@@ -131,7 +131,12 @@ Original spec (kept for reference):
 - Nav: add "Sessions" → `/sessions` to each role config + the onboarding page link, deduped by href (Decision 9).
 - Tests (Sonnet): browse renders/empty-state; host vs participant selection; visibility toggle PATCHes; redirect branching; nav dedupe.
 
-### Phase 6 — Verify + docs
+### Phase 6 — Verify + docs — ✅ COMPLETE
+- Docs: `docs/api.md` gained an "Ad-hoc (orphan) sessions" section (public list, visibility toggle, route order, concurrent cap, neutral routes, deferred-abuse note); `README.md` gained an ad-hoc-sessions feature bullet.
+- Full suite: `go test ./... -count=1` green; `bun run test` 768/768 (95 files); `bunx tsc --noEmit` clean; lint ratchet clean.
+- E2E: `e2e/adhoc-sessions.spec.ts` (host → publish → browse → join on a class-less session) written to the existing session-spec pattern and verified collectable via `playwright test --list`. **NOT executed against a live stack** — Bridge E2E needs all three services up and a pinned `E2E_BASE_URL` (`docs/testing.md`); no such run happened in this environment.
+
+Original spec (kept for reference):
 - Docs: `docs/` session/API docs + `README.md` feature bullet ("any user can host ad-hoc sessions; browse or join by link"). Document `visibility`, the browse endpoint + route order, the concurrent cap, the neutral routes, and the deferred-abuse note.
 - Full suite: `bun run test`, `cd platform && go test ./... -count=1`, targeted E2E for host→browse→join on a class-less public session.
 

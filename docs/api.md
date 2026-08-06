@@ -55,6 +55,17 @@ Compatibility notes:
 - `POST /api/sessions/{id}/end` ends a session (moved from `PATCH /api/sessions/{id}` in Plan 030b).
 - `GET /api/sessions/by-class/{classId}` and `GET /api/sessions/active/{classId}` remain available as compatibility wrappers for class-scoped surfaces.
 
+### Ad-hoc (orphan) sessions — Plan 090
+
+Any authenticated user — not only teachers — may host an orphan (`classId: null`) session:
+
+- **`GET /api/sessions/public?limit=&cursor=`** lists sessions whose `visibility` is `"public"`. Cursor-paginated. This is the source for the role-neutral `/sessions` browse page.
+- **`visibility`** is a session column with values `"unlisted"` (default) or `"public"`. Only `"public"` sessions appear in the browse list; `"unlisted"` sessions remain reachable by direct link / invite token. Toggle it with `PATCH /api/sessions/{id}` `{ "visibility": "public" | "unlisted" }` — host or platform-admin only.
+- **Route order matters:** `/api/sessions/public` is registered before the `/{id}` subtree so `public` is not captured as a session id.
+- **Concurrent-host cap:** a single host is limited to a bounded number of simultaneously-live orphan sessions (abuse guard, Plan 090 Phase 1).
+- **Role-neutral surface:** `/sessions` (browse), `/sessions/{id}` (room — host or participant, resolved by which of `teacher-page`/`student-page` the caller is authorized for), served by `PortalShell portalRole={null}`, which admits any authenticated user (see `authenticated` on `/api/me/portal-access`).
+- **Abuse — deferred, not solved.** Auth, the concurrent cap, and host-only controls are the in-scope mitigations. Reporting, bans, per-window rate limits, and content moderation are explicitly out of scope for Plan 090 and tracked there as follow-ups.
+
 ### `POST /api/sessions`
 
 Create a live session.
