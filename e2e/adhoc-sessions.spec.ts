@@ -28,7 +28,16 @@ test.describe("ad-hoc sessions", () => {
     await loginWithCredentials(host, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
 
     await host.goto("/sessions");
-    await host.getByRole("button", { name: /start a session/i }).click();
+
+    // StartSessionButton (mode="orphan") is a two-step control: the first click
+    // reveals a title form (an Input + a submit button that share the "Start
+    // Session" label — see src/components/teacher/start-session-button.tsx);
+    // only submitting that form POSTs /api/sessions. Give the session a unique
+    // title so the joiner can find its row in the browse list below.
+    const sessionTitle = `E2E adhoc ${Date.now()}`;
+    await host.getByRole("button", { name: /start session/i }).click();
+    await host.getByPlaceholder("Session title").fill(sessionTitle);
+    await host.getByRole("button", { name: /start session/i }).click();
 
     // Class-less host is routed to the role-neutral room, not /teacher/sessions.
     await host.waitForURL(/\/sessions\/[0-9a-f-]{36}$/);
@@ -36,6 +45,7 @@ test.describe("ad-hoc sessions", () => {
     expect(sessionId).toMatch(/^[0-9a-f-]{36}$/);
 
     // ── Host: publish it via the visibility toggle ──────────────────────────
+    // Unlisted shows "List publicly"; after the click it reads "Public".
     await host.getByTestId("visibility-toggle").click();
     await expect(host.getByTestId("visibility-toggle")).toContainText(/public/i);
 
@@ -45,9 +55,15 @@ test.describe("ad-hoc sessions", () => {
     await loginWithCredentials(joiner, ACCOUNTS.student2.email, ACCOUNTS.student2.password);
 
     await joiner.goto("/sessions");
-    const row = joiner.getByRole("link", { name: new RegExp(sessionId) }).first();
-    await expect(row).toBeVisible();
-    await row.click();
+    // The browse row renders the session TITLE + host name (see
+    // src/app/(portal)/sessions/page.tsx). The session UUID never appears in the
+    // row's visible text — it lives only in the "Join" link's href. So assert the
+    // row is present by its unique title, then follow that row's Join link
+    // (located by href, since every row's link is labelled just "Join").
+    await expect(joiner.getByText(sessionTitle)).toBeVisible();
+    const joinLink = joiner.locator(`a[href="/sessions/${sessionId}"]`);
+    await expect(joinLink).toBeVisible();
+    await joinLink.click();
 
     // Joiner lands in the same neutral room as a participant.
     await joiner.waitForURL(new RegExp(`/sessions/${sessionId}$`));

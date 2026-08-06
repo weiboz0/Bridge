@@ -1272,7 +1272,8 @@ func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := chi.URLParam(r, "id")
-	if _, ok := h.isSessionOwner(w, r, sessionID, claims); !ok {
+	session, ok := h.isSessionOwner(w, r, sessionID, claims)
+	if !ok {
 		return
 	}
 
@@ -1288,6 +1289,13 @@ func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Visibility != nil && !validSessionVisibility(*body.Visibility, false) {
 		writeError(w, http.StatusBadRequest, "visibility must be unlisted or public")
+		return
+	}
+	// Public visibility is a class-less (ad-hoc) feature. Refuse to make a
+	// class-bound session public — otherwise it would surface in the global
+	// browse list and be joinable by any authenticated user across orgs.
+	if body.Visibility != nil && *body.Visibility == "public" && session.ClassID != nil {
+		writeError(w, http.StatusBadRequest, "only class-less sessions can be made public")
 		return
 	}
 
@@ -1586,6 +1594,14 @@ func (h *SessionHandler) GetStudentPage(w http.ResponseWriter, r *http.Request) 
 		} else if existing != nil && (existing.Status == "invited" || existing.Status == "present") {
 			authorized = true
 		}
+	}
+	// Plan 090: a class-less public session is open-join. A first-time browser
+	// clicking "Join" has no participant row yet and is not a class member, so
+	// without this clause GetStudentPage 403s and the room dispatcher never
+	// reaches the /join POST. Mirror CanAccessSession's public clause exactly
+	// (live + public + class-less); the /join POST then records participation.
+	if !authorized && session.ClassID == nil && session.Visibility == "public" {
+		authorized = true
 	}
 	if !authorized {
 		writeError(w, http.StatusForbidden, "Not enrolled in this session's class")

@@ -142,7 +142,8 @@ Original spec (kept for reference):
 
 ## Risks
 
-- **Abuse surface.** Any user hosting public sessions invites spam/abuse. Mitigation in-scope: auth required, concurrent cap, host-only controls. Out-of-scope but flagged: reporting/bans, per-window rate limits, content moderation. Call this out in the PR so it's a conscious deferral with this plan as the follow-up anchor.
+- **Abuse surface.** Any user hosting public sessions invites spam/abuse. Mitigation in-scope: auth required, concurrent cap. Out-of-scope but flagged: reporting/bans, per-window rate limits, content moderation. Call this out in the PR so it's a conscious deferral with this plan as the follow-up anchor.
+  - **Known gap (code-review R1 finding 7):** on a **public** session, `RemoveParticipant` does not stick — a kicked user immediately re-passes the public open-join clause and rejoins. So host-remove is NOT a working abuse control for public sessions; a durable kick needs a `removed`/banned participant state that the join path checks. **Follow-up plan required before host-remove is advertised for public sessions.** Do not claim host-remove as a public-session mitigation in the PR.
 - **`canJoinSession` is load-bearing.** It gates join, SSE, help-queue, and is referenced by page loaders. The restructure (Phase 2) must preserve every class-bound path exactly. Mitigation: phase the bugfix separately from the visibility clause; table-driven tests for both class-bound and class-less matrices before and after.
 - **Enum migration on a hot column.** Adding an enum + column is additive and backfills to default; low risk. Verify the TS schema mirror and any `SELECT *`/scan ordering in `store/sessions.go` are updated together (a missed scan column is the classic break).
 - **Route duplication / drift.** Three session route trees (`/teacher`, `/student`, `/sessions`) risk divergence. Mitigation: the neutral routes reuse the existing `TeacherDashboard`/`StudentSession` components rather than forking them; portal routes become thin entry points.
@@ -181,7 +182,22 @@ Both reviewers concur. Self-review: APPROVE. Codex: APPROVE (Round-2 changes wer
 
 ## Code Review
 
-_(3-way: self + Codex + GLM against the consolidated branch diff, before PR.)_
+### Round 1 — 4-way (Tier A: backend handlers + auth surface + store), 2026-08-06
+
+Self (Opus 5) + Codex + independent Opus + GLM, against `git diff main...HEAD`. **Two reviewers (Codex, independent Opus) independently found the same core blocker → CHANGES REQUESTED; GLM APPROVE WITH NITS.** All findings verified against the code before acting.
+
+1. `[FIXED]` `[codex][opus]` **BLOCKER — browse→join broken.** `GetStudentPage` (sessions.go) had no public fall-through and didn't delegate to `CanAccessSession`, so a public non-participant clicking Join got 403 → the room dispatcher's `notFound()`; the `/join` POST never ran. Two reviewers hit this independently. → Added `if !authorized && session.ClassID == nil && session.Visibility == "public"` clause. Regression test `TestSessionHandler_GetStudentPage_ClassLessPublicNonParticipant200` (non-host/non-member/non-participant → 200; fails without the clause) + `..._ClassLessUnlistedNonParticipant403` (proves visibility-gated).
+2. `[FIXED]` `[codex]` **BLOCKER — cross-org leak.** The public clause in `CanAccessSession` and the `ListPublicSessions` query didn't require `class_id IS NULL`, and `PatchSession` let a host set `visibility=public` on a **class-bound** session — so a teacher could publish their class session to the global browse list and any user in any org could join. Violates the plan's own Non-goal ("class-bound sessions untouched"). → Three-layer fix: PatchSession rejects public on class-bound (400); `CanAccessSession` public clause requires `classID == nil`; `ListPublicSessions` WHERE adds `class_id IS NULL`. Tests: `PatchSession_ClassBoundCannotBePublic400`, `CanAccessSession_ClassBoundPublicDeniesNonMember`, `ListPublicSessions_ExcludesClassBound`.
+3. `[FIXED]` `[opus]` **Tests canonized the bug.** A Go test (`PatchSession_HostUpdatesVisibility`) PATCHed the *class-bound* fixture to public and asserted 200 — encoding the leak. → Rewritten to toggle visibility on a class-less session (preserves the host-can-toggle intent). Frontend room-page test already had both the 200-fallback and the genuinely-forbidden-403 case; left intact.
+4. `[FIXED]` `[glm]` **Test gaps.** No zero-role `authenticated:true/authorized:false` Go test; browse 401/bad-cursor untested. → Added `TestGetPortalAccess_ZeroRoleAuthenticated`, `ListPublicSessions_Unauthenticated401`, `ListPublicSessions_MalformedCursor400`.
+5. `[FIXED]` `[codex][opus]` **E2E spec could never run** (start-session opens a title form first; browse-row locator matched a UUID absent from visible text). → Rewritten to the real two-step start flow and to locate by title + Join-link href. Still not executed against a live stack (documented).
+6. `[DOC]` `[glm]` **Ended-session teacher SSE/help now 410.** `canJoinSession` delegating to `CanAccessSession` means a class-less host whose session ended gets 410 on SSE/help-queue (was 200). Judged **intentional** — an ended session is read-only. Noted here rather than reverted.
+7. `[DEFERRED]` `[glm]` **RemoveParticipant is ineffective on public sessions** — a kicked user immediately re-passes the public clause and rejoins. The plan already scopes real moderation (bans, rate limits) as out-of-scope/deferred; a durable kick needs a "removed"/banned state. **Tracked as follow-up — see Risks.** The PR must not claim host-remove is a working abuse mitigation for public sessions.
+8. `[WONTFIX]` `[codex]` NIT: a malformed-but-decodable cursor compared against a UUID column yields 500 not 400. Low-impact; `MalformedCursor400` covers the common bad-input case. Follow-up if it recurs.
+
+Verified independently: all 8 new tests pass with `DATABASE_URL=…bridge_test` (the integration harness reads `DATABASE_URL`, not `TEST_DATABASE_URL`); the headline test constructs the real non-host/non-member/non-participant scenario.
+
+_Re-confirmation of the flagging reviewers (Codex, Opus) against the fixes: pending / optional — the fixes are proven by tests that fail without them._
 
 ## Post-Execution Report
 

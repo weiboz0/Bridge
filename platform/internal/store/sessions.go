@@ -418,7 +418,11 @@ func (s *SessionStore) ListPublicSessions(ctx context.Context, limit int, cursor
 	}
 
 	args := []any{}
-	where := `WHERE ls.status = 'live' AND ls.visibility = 'public'`
+	// class_id IS NULL: only ad-hoc sessions are browseable. A class-bound
+	// session that somehow carries visibility='public' must never surface in
+	// the global browse list (defense in depth alongside the PatchSession guard
+	// and the class_id check in CanAccessSession).
+	where := `WHERE ls.status = 'live' AND ls.visibility = 'public' AND ls.class_id IS NULL`
 	if cursorStartedAt != nil && cursorID != nil {
 		where += ` AND (ls.started_at, ls.id) < ($1, $2)`
 		args = append(args, *cursorStartedAt, *cursorID)
@@ -836,7 +840,11 @@ func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID s
 		return true, "participant", nil
 	}
 
-	if status == "live" && visibility == "public" {
+	// Public open-join is a CLASS-LESS (ad-hoc) feature only. A class-bound
+	// session must never be reachable via the public clause — that would let
+	// any authenticated user (any org) into another org's class session.
+	// Class membership above is the only path into a class-bound session.
+	if status == "live" && visibility == "public" && classID == nil {
 		return true, "public", nil
 	}
 

@@ -699,7 +699,16 @@ func TestSessionHandler_PatchSession_TeacherUpdatesInviteExpiry(t *testing.T) {
 func TestSessionHandler_PatchSession_HostUpdatesVisibility(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 
-	toPublic := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+fx.sessionID, map[string]any{
+	// Visibility toggling to public is a class-LESS (ad-hoc) feature only; the
+	// cross-org leak fix rejects public on a class-bound session (see
+	// TestSessionHandler_PatchSession_ClassBoundCannotBePublic400). Exercise the
+	// happy path on a class-less session the host owns.
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc visibility toggle",
+	})
+
+	toPublic := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+session.ID, map[string]any{
 		"visibility": "public",
 	}, fx.claims(fx.teacher, false))
 	require.Equal(t, http.StatusOK, toPublic.Code, "body=%s", toPublic.Body.String())
@@ -707,7 +716,7 @@ func TestSessionHandler_PatchSession_HostUpdatesVisibility(t *testing.T) {
 	require.NoError(t, json.Unmarshal(toPublic.Body.Bytes(), &publicSession))
 	assert.Equal(t, "public", publicSession.Visibility)
 
-	toUnlisted := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+fx.sessionID, map[string]any{
+	toUnlisted := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+session.ID, map[string]any{
 		"visibility": "unlisted",
 	}, fx.claims(fx.teacher, false))
 	require.Equal(t, http.StatusOK, toUnlisted.Code, "body=%s", toUnlisted.Body.String())
@@ -1131,4 +1140,136 @@ func TestSessionHandler_GetParticipants_AccessPlatformAdmin(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/participants", nil, fx.claims(fx.otherUser, true))
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// ------------------- GET /api/sessions/{id}/student-page (plan 090 public admission) -------------------
+
+// Headline plan-090 regression guard: a class-less, live, public session must
+// admit a first-time browser — not the host, not a class member, no participant
+// row — so the room dispatcher can reach the /join POST. Before the public-
+// admission clause in GetStudentPage this returned 403 and browse->join 404'd.
+// This test would FAIL without that clause.
+func TestSessionHandler_GetStudentPage_ClassLessPublicNonParticipant200(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Public open room",
+		Visibility: "public",
+	})
+
+	// otherUser is not the host, not a class member, and has no participant row.
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/student-page", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var payload studentPagePayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	assert.Equal(t, session.ID, payload.Session.ID)
+	assert.Nil(t, payload.ClassID)
+	assert.Equal(t, "/student", payload.ReturnPath)
+}
+
+// The public-admission clause is visibility-gated, not merely class-gated: an
+// UNLISTED class-less session must still 403 a non-participant. Without the
+// visibility check the clause would open every ad-hoc session to any
+// authenticated user.
+func TestSessionHandler_GetStudentPage_ClassLessUnlistedNonParticipant403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Unlisted closed room",
+		Visibility: "unlisted",
+	})
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/student-page", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+// ------------------- PATCH visibility guard (cross-org leak fix) -------------------
+
+// A class-bound session must never be made public: that would surface it in the
+// global browse list and let any authenticated user across orgs join it. The
+// PatchSession guard returns 400 and leaves visibility unchanged.
+func TestSessionHandler_PatchSession_ClassBoundCannotBePublic400(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	// fx.sessionID is the fixture's class-bound session.
+	w := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+fx.sessionID, map[string]any{
+		"visibility": "public",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+
+	// The session must remain non-public — the guard runs before UpdateSession.
+	got := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, got.Code, "body=%s", got.Body.String())
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(got.Body.Bytes(), &session))
+	assert.Equal(t, "unlisted", session.Visibility, "class-bound session must not have been made public")
+}
+
+// ------------------- CanAccessSession / ListPublicSessions store-level guards -------------------
+
+// Direct store test for the cross-org leak fix: a class-bound session that
+// carries visibility='public' (constructed at the store layer, bypassing the
+// PatchSession guard) must NOT grant "public" access to a non-member. Only class
+// membership opens a class-bound session.
+func TestSessionStore_CanAccessSession_ClassBoundPublicDeniesNonMember(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	classBoundPublic := fx.createSession(t, store.CreateSessionInput{
+		ClassID:    strPtr(fx.classID),
+		TeacherID:  fx.teacher.ID,
+		Title:      "Class-bound but public",
+		Visibility: "public",
+	})
+
+	allowed, reason, err := fx.h.Sessions.CanAccessSession(ctx, classBoundPublic.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	assert.False(t, allowed, "class-bound public session must not admit a non-member via the public clause")
+	assert.Equal(t, "no_access", reason)
+}
+
+// ListPublicSessions must exclude class-bound sessions even when one carries
+// visibility='public' (constructed at the store layer). Defense in depth: the
+// PatchSession guard stops the API from ever setting this, but the browse query
+// must independently refuse to surface it.
+func TestSessionStore_ListPublicSessions_ExcludesClassBound(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	classBoundPublic := fx.createSession(t, store.CreateSessionInput{
+		ClassID:    strPtr(fx.classID),
+		TeacherID:  fx.teacher.ID,
+		Title:      "Class-bound public (leaky)",
+		Visibility: "public",
+	})
+	classLessPublic := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Class-less public (browseable)",
+		Visibility: "public",
+	})
+
+	items, err := fx.h.Sessions.ListPublicSessions(ctx, 100, nil, nil)
+	require.NoError(t, err)
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	assert.Contains(t, gotIDs, classLessPublic.ID, "class-less public session should be browseable")
+	assert.NotContains(t, gotIDs, classBoundPublic.ID, "class-bound session must never surface in the public browse list")
+}
+
+// ------------------- GET /api/sessions/public (browse endpoint guards) -------------------
+
+func TestSessionHandler_ListPublicSessions_Unauthenticated401(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public", nil, nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_ListPublicSessions_MalformedCursor400(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// %40%40%40 decodes to "@@@", which is not valid base64url -> decodeCursor
+	// errors -> handler maps to 400.
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public?cursor=%40%40%40", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 }
