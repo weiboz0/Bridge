@@ -1,99 +1,98 @@
-# Coding Agent Policy
+# Coding agent policy
 
-Bridge uses **domain-based dispatch** for coding work. The orchestrator (Opus 4.7) stays in the session for planning, review, and coordination, then dispatches a subagent whose model matches the work's domain — not its complexity.
+Bridge dispatches coding work by **domain**, not by complexity.
+The orchestrator (Opus 5) stays in session for planning, review, and coordination, then hands
+implementation to a subagent whose model matches what the code *is* — not how hard it looks.
 
-## Default dispatch by domain
+## Dispatch table
 
-| Domain | Default agent | Dispatch | Notes |
-|--------|---------------|----------|-------|
-| **Backend** — Go in `platform/`, Hocuspocus server, Go-adjacent server logic | Codex | `codex:codex-rescue` subagent | Codex is a strong fit for Go and server-side TypeScript. |
-| **Frontend** — Next.js App Router, React components, `src/` UI code | Claude Sonnet 4.6 | `Agent` tool, `model: "sonnet"` | Pattern-heavy work with fast feedback loops. |
-| **Tests** (all domains) | Claude Sonnet 4.6 | `Agent` tool, `model: "sonnet"` | Tests are pattern-heavy + repetitive across backend and frontend alike. |
-| **Complex / cross-domain / new patterns** | Claude Opus 4.7 | Orchestrator inline OR `Agent` tool, `model: "opus"` | See "When to escalate to Opus" below. |
-| **Review** | Claude Opus 4.7 + Codex (+ GLM for code review only) | See `docs/reviewers.md` | Codex reviews even when it also wrote the code (other reviewers carry the independence). |
+| Domain | Agent | Dispatch | Why |
+|--------|-------|----------|-----|
+| **Backend** — Go in `platform/`, `server/hocuspocus.ts` | Codex | `codex:codex-rescue` subagent | Go's conventions here are tight (Chi, store/handler split, parameterized SQL, `slog`, RFC3339). Codex follows them well from one brief. |
+| **Frontend** — Next.js App Router, React, `src/` | Sonnet 4.6 | `Agent`, `model: "sonnet"` | Pattern-heavy work across many similar components, fast feedback loop. |
+| **Tests** (all domains) | Sonnet 4.6 | `Agent`, `model: "sonnet"` | Pattern-heavy and repetitive across backend and frontend alike. |
+| **Cross-domain / new patterns / hard debugging** | Opus 5 | inline, or `Agent`, `model: "opus"` | The cross-cutting reasoning IS the value; splitting by domain would lose it. |
+| **Review** | see `docs/reviewers.md` | — | Reviewer slots are a separate roster from implementer slots. Don't conflate them. |
 
-GLM remains **review-only** (code review). Do NOT delegate implementation to it.
+GLM is **review-only**. Never delegate implementation to it.
 
-## Why domain instead of complexity
+## Why domain rather than complexity
 
-The previous policy split by complexity (Sonnet routine / Opus complex) and reserved Codex for review. The new policy delegates by what the code is, not how hard it is:
-
-- **Codex on backend** — Go has tight conventions (Chi router, store/handler separation, parameterized SQL, `slog`, RFC3339 timestamps, defensive paths) that Codex tends to follow well. The orchestrator briefs once and Codex executes within the convention.
-- **Sonnet on frontend** — React + Next.js work benefits from fast iteration and pattern recognition across many similar components. Sonnet's speed-cost profile beats Opus for the bulk of UI work.
-- **Opus for orchestration + complex cases** — Cross-domain reasoning, brand-new patterns, and stuck-state debugging still warrant the orchestrator's context or an Opus subagent.
+Complexity-based dispatch requires predicting task difficulty up front, and that prediction is often
+wrong — work tagged "routine" turns out to need depth, work tagged "complex" turns out mechanical.
+Domain-based dispatch keys on the code's idiom and cost profile instead, which is observable rather
+than predicted. Genuinely cross-cutting cases stay with the orchestrator.
 
 ## How to dispatch
 
-### Codex (backend)
-
 ```
+# Backend
 Agent tool with:
   subagent_type: "codex:codex-rescue"
-  prompt: <complete brief — files to touch, what to do, verification steps>
-```
+  prompt: <complete brief>
 
-Codex briefs should include:
-- Exact files / package paths.
-- Test commands (`cd platform && go test ./... -count=1 -timeout 120s`).
-- Conventions the change must respect (see `CLAUDE.md` ## Coding Conventions → Go).
-- Whether to commit/push or hand back to orchestrator.
-
-### Sonnet (frontend, tests)
-
-```
+# Frontend / tests
 Agent tool with:
-  subagent_type: "general-purpose"   # or a specific persona where applicable
+  subagent_type: "general-purpose"
   model: "sonnet"
-  prompt: <complete brief — files to touch, what to do, verification steps>
+  prompt: <complete brief>
 ```
 
-The `model` parameter on the Agent tool **overrides** the subagent definition's default model. Valid values: `"sonnet"`, `"opus"`, `"haiku"`.
+The `model` parameter overrides the subagent definition's default. Valid: `"sonnet"`, `"opus"`, `"haiku"`, `"fable"`.
+`codex:codex-rescue` uses its own model regardless.
 
-### Opus (complex, escalation)
+## Brief checklist
 
-Same dispatch shape as Sonnet but `model: "opus"`. Or keep the work inline in the orchestrator session.
+Every dispatch, every route:
 
-## Subagent brief checklist (all dispatch routes)
+- The exact files to read, modify, or create — and the plan's `## File scope`, which the subagent must not exceed.
+- Acceptance criteria: which tests must pass, lint and type-check clean.
+- Context the subagent can't infer from the codebase ("use the existing pattern in `X`, don't invent one").
+- Whether to commit and push, or hand back to the orchestrator first.
+- For anything touching the database, the `DATABASE_URL` constraint from `AGENTS.md` — subagents
+  inherit the environment and can migrate a real database by accident.
 
-- The exact files to read / modify / create.
-- The acceptance criteria (tests that should pass, lint/type-check clean).
-- Context the subagent can't infer from the codebase alone ("use the existing pattern in `X`").
-- Whether to commit + push, or hand back to the orchestrator for review first.
+## Trust but verify
 
-After the subagent returns, the orchestrator must **verify the actual changes** (read the diff, run tests if relevant) before reporting work as done. The subagent's summary describes intent, not necessarily reality.
+After a subagent returns, the orchestrator MUST verify the actual changes — read the diff, run the
+tests, grep for cross-references it claims to have touched — before reporting the work done.
+**A subagent's summary describes intent, not necessarily reality.**
+This has caught real discrepancies; treat it as a required step, not a formality.
 
-## When to escalate to Opus
+## When to stay inline
 
-Even within a domain, some work needs the orchestrator (or an Opus subagent):
+Spawning a subagent costs context to write and results to verify. Skip it when:
 
-- Designing a new architectural pattern or cross-cutting abstraction.
-- Debugging a multi-system issue (race conditions, state-machine bugs, cross-service auth).
-- Implementing the first phase of a plan that establishes patterns later phases will follow.
-- Reading a large unfamiliar codebase to plan a refactor.
-- Tasks that benefit from the 1M context window (e.g., reasoning over the whole `platform/internal/store` at once).
-- Anything where the domain-default subagent has already attempted and gotten stuck.
-
-When in doubt, dispatch the domain default first. Promote to Opus only when the work clearly warrants it. Promotion mid-task is fine — the orchestrator can take over directly or spawn an Opus subagent with the previous attempt's context.
-
-## When to skip the subagent and stay inline
-
-Spawning a subagent has overhead — context to write, results to verify. Skip it when:
 - The change is a single-line edit or trivial fix.
-- You're mid-debugging and need the conversation context to continue (the subagent loses everything not in its prompt).
-- You're iterating rapidly on a small file and the back-and-forth would dominate.
+- You're mid-debugging and need the conversation context — the subagent loses everything not in its prompt.
+- You're iterating rapidly on a small file and the round-trip would dominate.
 
 Otherwise, default to the domain dispatch.
 
-## Self-review always runs on Opus 4.7
+## Parallelism
 
-The **self-review stage** of both gates (plan review #1 and code review #1) ALWAYS runs on Opus 4.7, regardless of which agent wrote the plan or code. Review is judgment-heavy and load-bearing — a routine implementation deserves a careful review, and the cost gap between models on a single review pass is dwarfed by the cost of shipping a flaw the gate should have caught.
+- **Parallelize** when subtasks touch different files with no ordering dependency.
+  Cross-domain is the common case: dispatch Codex for the Go handler and Sonnet for the React
+  component in a single message.
+- **Don't** when subtasks share state, when the work is small enough that overhead exceeds the gain,
+  or when correctness depends on ordering.
+
+## Promotion mid-task
+
+If the domain default hits a wall — Codex stuck on a race, Sonnet stuck on a hook interaction — take
+it over inline with the context intact, or spawn an Opus subagent carrying the previous attempt.
+A user `/model` pin overrides all of this; respect it.
+
+## Self-review always runs on Opus 5
+
+The self-review slot of both gates runs on Opus 5 regardless of who wrote the code.
+Review is judgment-heavy and load-bearing: the cost gap on a single pass is dwarfed by the cost of
+shipping a flaw the gate should have caught.
 
 ## Codex's dual role
 
-Codex implements backend code AND participates in plan + code reviews (see `docs/reviewers.md`). When Codex wrote the code, its own review naturally has familiarity bias — but Codex still runs as one of the reviewers because the gate's strength comes from the ensemble: GLM (code review) and Opus-self provide independent perspectives on Codex-authored code.
-
-## All routes — same rules
-
-- Both Codex and Sonnet follow the review gates for plans (self + Codex) and code (self + Codex + GLM).
-- Both respect the branch-first rule and the development workflow.
-- Both must honor the conventions in `CLAUDE.md` ## Coding Conventions.
+Codex both implements backend code and sits on the review gates.
+When it wrote the code, its own review carries familiarity bias — the ensemble supplies independence
+via the fresh-context Claude reviewer and GLM.
+Note also that Codex runs with `sandbox_mode = "danger-full-access"`: a "read-only" instruction is
+prompt-enforced only, so state it explicitly every time.
