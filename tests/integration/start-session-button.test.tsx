@@ -32,7 +32,10 @@ function mockFetch(...responses: { status: number; body: any }[]) {
 
 describe("StartSessionButton — Plan 047 unlinked-topics guard", () => {
   it("creates session normally on 201 (no guard, no dialog)", async () => {
-    const fetchMock = mockFetch({ status: 201, body: { id: "s-1" } });
+    // Class-bound create returns the classId; the button routes a class-bound
+    // session to /teacher/sessions (plan 090 redirect branching keys on the
+    // response's classId — a class-less create omits it and routes to /sessions).
+    const fetchMock = mockFetch({ status: 201, body: { id: "s-1", classId: "c-1" } });
     render(<StartSessionButton classId="c-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /start live session/i }));
@@ -52,7 +55,7 @@ describe("StartSessionButton — Plan 047 unlinked-topics guard", () => {
           unlinkedTopicTitles: ["A", "B"],
         },
       },
-      { status: 201, body: { id: "s-2" } }
+      { status: 201, body: { id: "s-2", classId: "c-1" } }
     );
     render(<StartSessionButton classId="c-1" />);
 
