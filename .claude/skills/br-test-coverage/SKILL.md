@@ -1,6 +1,6 @@
 ---
 name: br-test-coverage
-description: Use when the user asks "what tests should I run for this change?", "what's missing test coverage?", "did I add enough tests for plan-NNN?", "test gap audit before push". Scans a git diff range, cross-references changed source files with their test files, identifies missing/partial coverage per CLAUDE.md rules (every Go endpoint MUST have an integration test; happy-path + auth + error + cross-user isolation per public function), and produces both a gap report AND a targeted test plan (minimal commands to verify the actual changed code). Optional auto_run executes the plan.
+description: Use when the user asks "what tests should I run for this change?", "what's missing test coverage?", "did I add enough tests for plan-NNN?", "test gap audit before push". Scans a git diff range, cross-references changed source files with their test files, identifies missing/partial coverage per AGENTS.md rules (every Go endpoint MUST have an integration test; happy-path + auth + error + cross-user isolation per public function), and produces both a gap report AND a targeted test plan (minimal commands to verify the actual changed code). Optional auto_run executes the plan.
 ---
 
 # br-test-coverage
@@ -10,7 +10,7 @@ Pre-push test-gap audit + smart-scoped test runner. Designed to catch missing-te
 ## When to invoke
 
 - Before pushing a feature branch: "any test gaps?" / "what should I run?"
-- After implementing a phase but before the code-review gate: confirm CLAUDE.md test rules are met.
+- After implementing a phase but before the code-review gate: confirm AGENTS.md test rules are met.
 - When unsure which test subset to run on a small change (instead of always running the full suite).
 - When you want auto-execution of just the minimal command set (`auto_run=true`).
 
@@ -40,7 +40,7 @@ All optional. Args parsed `key=value` from the slash-command tail.
 4. Else, if working tree dirty (uncommitted changes) → `range=working-tree` (use `git diff` for content, `git ls-files --modified --others --exclude-standard` for the file set).
 5. Else → ask the user for a range. Don't audit `main..main`.
 
-## CLAUDE.md rules being audited
+## AGENTS.md rules being audited
 
 | Tag | Rule | Detection |
 |---|---|---|
@@ -122,7 +122,7 @@ for route in $NEW_ROUTES; do
     emit "[GAP] handlers/${file##*/}: $ROUTE_PATH (handler $HANDLER_FN) has no integration test"
     suggest_tests "$HANDLER_FN"  # happy-path + auth + error + cross-user names
   else
-    # PARTIAL check: does the test file cover all four CLAUDE.md categories?
+    # PARTIAL check: does the test file cover all four AGENTS.md categories?
     HAS_AUTH=$(grep -lE "Unauthorized|AuthRequired|StatusUnauthorized|401" $TEST_HITS)
     HAS_ERROR=$(grep -lE "StatusBadRequest|StatusInternalServerError|400|500" $TEST_HITS)
     HAS_CROSS_USER=$(grep -lE "Outsider|NonMember|cross.org|cross.user|403|404" $TEST_HITS)
@@ -297,7 +297,7 @@ fi
 ### Gaps (X)
 
 [GAP] handlers/sessions.go:45 — new route POST /api/sessions (handler h.CreateSession) — no integration test references this route/handler.
-  → Required tests per CLAUDE.md (happy + auth + error + cross-user):
+  → Required tests per AGENTS.md (happy + auth + error + cross-user):
     - TestCreateSession_HappyPath
     - TestCreateSession_AuthRequired
     - TestCreateSession_InvalidContent_400
@@ -335,9 +335,9 @@ Estimated runtime: ~15s (vs full suite: `bun run test` + `cd platform && go test
 
 ### Step 8 — Offer to fill gaps (if `generate_missing=true`)
 
-If the user opted in, dispatch subagents per CLAUDE.md dispatch table (docs/coding-agent.md):
+If the user opted in, dispatch subagents per AGENTS.md dispatch table (docs/coding-agent.md):
 
-- Backend test gaps (Go) → `Agent(subagent_type=codex:codex-rescue)` with a prompt listing the missing test names + file paths + the exact "happy + auth + error + cross-user" pattern from CLAUDE.md.
+- Backend test gaps (Go) → `Agent(subagent_type=codex:codex-rescue)` with a prompt listing the missing test names + file paths + the exact "happy + auth + error + cross-user" pattern from AGENTS.md.
 - Frontend test gaps (TS) → `Agent(subagent_type=general-purpose, model=sonnet)` with the missing test list + the correct `tests/` or `__tests__/` location.
 
 Dispatch in parallel (single message, multiple Agent calls). Wait for both, then re-run Steps 1-7 to confirm the gaps closed. Report results.

@@ -170,8 +170,8 @@ git -C /home/chris/workshop/bridge log --oneline -10
 ```
 
 Tag rules:
-- Uncommitted changes > 10 files → `[WARNING]` "Significant uncommitted work — consider WIP commit (multi-agent coord per CLAUDE.md)".
-- Uncommitted changes on `main` branch → `[WARNING]` "Dirty main — CLAUDE.md requires feature branches; stage or stash before resuming".
+- Uncommitted changes > 10 files → `[WARNING]` "Significant uncommitted work — consider WIP commit (multi-agent coord per AGENTS.md)".
+- Uncommitted changes on `main` branch → `[WARNING]` "Dirty main — AGENTS.md requires feature branches; stage or stash before resuming".
 - Unpushed commits on current branch → `[INFO]` "N commits ahead of remote".
 - Stash entries older than 7 days → `[INFO]` "Old stashes; consider git stash drop".
 

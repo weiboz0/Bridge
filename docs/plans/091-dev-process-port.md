@@ -245,4 +245,46 @@ _Pending._
 
 ## Post-Execution Report
 
-_Pending._
+All seven phases implemented. Two follow-up plans drafted. Nothing pushed.
+
+### Shipped
+
+| Phase | Result |
+|---|---|
+| 1–3 (atomic) | `AGENTS.md` canonical with enumerated hard safeguards; `CLAUDE.md` reduced to a pointer; `CODEX.md` deleted; workflow/reviewer/dispatch docs rewritten; new `bug-investigation-gate.md`, `architecture/decisions.md` (9 entries), `testing.md`; `project-structure.md` stale ports corrected. |
+| 4 | Seven guard scripts + shared `lib/uniqueness.sh` + non-empty `plan-collision-baseline.txt` + `ci-local.sh` + `tests/test-guards.sh` (20 assertions). |
+| 5 | `.github/workflows/ci.yml` — two jobs, `gate` shelling out to `ci-local.sh` so CI cannot drift from local. |
+| 6 | `chore/migrate-skills` merged (4 skills), all updated for the new gates, 3 new skills written. 7 tracked under `.claude/skills/`. |
+| 7 | Plans 092 (LLM test gating) and 093 (lint debt) drafted. |
+
+### Deviations from plan
+
+1. **Phase 4 merged into the 1–3 atomic commit.** The new governance docs instruct agents to run `ci-local.sh` and `pre-merge-guard.sh`; shipping the rules a commit before the scripts would have recreated the exact dangling-reference problem the atomicity requirement exists to prevent.
+2. **Scope widened twice, both user-authorized after the safeguard paused.** First to `src/app/(portal)/teacher/chapters/new/page.tsx`, `tests/unit/identity-assert.test.ts`, `scripts/dev.ts` (8 pre-existing `tsc` errors); then to `tests/helpers.ts` (the database footgun below). The safeguard fired correctly both times — on its own author, mid-execution.
+3. **Lint handled by ratchet, not by fixing.** 145 pre-existing violations across 83 files. `check-lint-baseline.sh` fails on new violations only. Plan 093 repays it.
+4. **CI job split.** `gate` runs `ci-local.sh --fast`; `e2e` runs Playwright with a booted stack. Together they equal a full run. Both must be required in branch protection or the split becomes a gap.
+
+### What the work uncovered
+
+Three defects found by building the gate rather than by reviewing the plan:
+
+1. **`bun run test` truncated the development database.** `.env` sets `DATABASE_URL` to `bridge`; bun auto-loads `.env`; `tests/helpers.ts` used `process.env.DATABASE_URL || <bridge_test fallback>`, and a fallback only applies when the variable is absent. `tests/setup.ts` then deleted every table in `afterEach`. Documentation claimed the suite used `bridge_test`. Fixed at source — `tests/helpers.ts` now hard-refuses any database not ending in `_test`.
+2. **`main` did not pass `tsc --noEmit`.** 8 errors, reproduced on `main` before touching anything. Fixed.
+3. **`docs/project-structure.md` documented the wrong ports** (3003/8002 vs `.env`'s 3101/8100), on a machine where 3003 hosts an unrelated service — the same wrong assumption baked into Playwright's `baseURL` default.
+
+Two of this plan's own earlier fixes were themselves wrong, caught before landing:
+
+- `--env-file=/dev/null` blocked API billing but stripped `DATABASE_URL`, breaking 3 tests. The obvious repair — letting `.env` load — would have pointed all 848 tests at live data.
+- The lint ratchet's first version filtered to `git ls-files`, silently ignoring violations in new untracked files. Its own selftest caught it.
+
+### Verification
+
+`bash scripts/ci-local.sh --fast` → **GATE PASSED**: lint ratchet, type-check, five collision guards, 20/20 guard self-tests, 837 vitest tests, `go test`. Each guard was separately observed *failing* on an injected collision. The DB guard was confirmed to reject `bridge` and accept `bridge_test`.
+
+### Known limitations
+
+1. **`.github/workflows/ci.yml` has never executed.** It cannot until the branch is pushed. Its YAML parses and every path it references exists; nothing further is verified.
+2. **`auto_merge` remains `false` and must stay so** until Phase 5's CI is proven green and a branch-protection ruleset marks both jobs required. The ruleset was not created — it is a remote write on an unpushed branch. `br-autopilot` now asserts a required check exists at runtime, so the coupling does not depend on anyone remembering this.
+3. **E2E has never run in this environment**, deliberately — no pinned `E2E_BASE_URL` and the fixtures mutate data.
+4. **Revision 4 of this plan was never reviewed.** Rounds 1 and 2 both found blockers, including rounds where a previous round's fix was broken. The base rate suggests Revision 4 is not clean.
+5. **Historical data loss from finding #1 is unassessed.** Whether past `bun run test` invocations cost real data depends on how tests have been run; not determinable from here.

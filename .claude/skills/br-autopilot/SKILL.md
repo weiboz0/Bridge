@@ -1,11 +1,11 @@
 ---
 name: br-autopilot
-description: Use when the user says "autopilot plan-NNN" / "run plan-NNN unattended" / "ship plan-NNN while I'm away" / "go autonomous on this plan". Pre-authorizes Claude to walk one named plan through the full Bridge cadence (Design→Plan→Build→Verify→Review→Ship) without per-step approval, while strictly enforcing CLAUDE.md's CRITICAL rules (branch-first, 2-way plan-review gate, phase-by-phase commits, 3-way code-review gate, post-execution report). Three retry caps (review-rounds, test-fix-attempts, total-turns) prevent runaway loops; named stop conditions auto-pause and surface to the user. Optional auto_merge=true ships after PR. Read this file end-to-end before the first phase commit; the pre-auth allowlist is load-bearing.
+description: Use when the user says "autopilot plan-NNN" / "run plan-NNN unattended" / "ship plan-NNN while I'm away" / "go autonomous on this plan". Pre-authorizes Claude to walk one named plan through the full Bridge cadence (Design→Plan→Build→Verify→Review→Ship) without per-step approval, while strictly enforcing AGENTS.md's CRITICAL rules (branch-first, plan-review gate, phase-by-phase commits, code-review gate, post-execution report). Three retry caps (review-rounds, test-fix-attempts, total-turns) prevent runaway loops; named stop conditions auto-pause and surface to the user. Optional auto_merge=true ships after PR. Read this file end-to-end before the first phase commit; the pre-auth allowlist is load-bearing.
 ---
 
 # br-autopilot
 
-Pre-authorize Claude to run ONE named Bridge plan from current state through merge, following CLAUDE.md's protocol strictly. Saves you "yes / merge / 1" prompts for the routine cadence steps; pauses for genuine judgment calls and risky operations.
+Pre-authorize Claude to run ONE named Bridge plan from current state through merge, following AGENTS.md's protocol strictly. Saves you "yes / merge / 1" prompts for the routine cadence steps; pauses for genuine judgment calls and risky operations.
 
 ## When to invoke
 
@@ -27,7 +27,7 @@ Pre-authorize Claude to run ONE named Bridge plan from current state through mer
 | `plan_id` | **required** | Plan number, e.g. `185`. Skill reads `docs/plans/$plan_id-*.md`. |
 | `start_phase` | first incomplete phase (read from plan file) | Phase to start on. Use to resume after a manual interruption. |
 | `end_phase` | last phase | Stop after this phase (don't ship). Use when you want to autopilot a subset then review yourself. |
-| `auto_merge` | `false` | If `true`, admin-squash-merge after PR + green gates. See "Auto-merge guards" below — multiple conditions block the merge even when this is true. |
+| `auto_merge` | `false` | If `true`, squash-merge via `gh pr merge --squash --auto` after PR + green gates. NEVER `--admin`. See "Auto-merge guards" below — multiple conditions block the merge even when this is true. |
 | `max_review_rounds` | `5` | Max fix-then-re-review cycles at any single gate (plan-review OR code-review). At cap with unresolved blockers → pause. |
 | `max_test_fix_attempts` | `5` | Max "edit → re-run failing tests" cycles per phase. At cap → pause. |
 | `max_total_turns` | `1000` | Global safety net. Counts assistant turns including tool calls. At cap → pause with a state-summary report. |
@@ -40,14 +40,14 @@ Pre-authorize Claude to run ONE named Bridge plan from current state through mer
 
 When autopilot is active, the following actions execute WITHOUT pausing for confirmation:
 
-- `git checkout -b feat/plan-$N-...` (creating the plan's feature branch — always before any work, per CLAUDE.md)
+- `git checkout -b feat/plan-$N-...` (creating the plan's feature branch — always before any work, per AGENTS.md)
 - `git commit` on the feature branch
 - `git push -u origin <feature-branch>` (pushing to remote)
 - `gh pr create` (opening the PR)
-- File `Edit` / `Write` / `MultiEdit` within the plan's scope (per the plan file's "Files of interest" / "Phase scope" sections)
-- `Agent` dispatches per CLAUDE.md dispatch table (backend Go in `platform/` → `codex:codex-rescue`; frontend `src/` + all test code → Agent with `model: sonnet`; complex/cross-domain → Opus subagent)
-- 2-way plan-review gate dispatch (Claude self on Opus 4.7 + `codex:codex-rescue`)
-- 3-way code-review gate dispatch (Claude self on Opus 4.7 + `codex:codex-rescue` + `opencode:opencode-review` with `--model volcengine-plan/glm-5.1`) in parallel
+- File `Edit` / `Write` / `MultiEdit` within the plan's scope (per the plan file's `## File scope` section)
+- `Agent` dispatches per AGENTS.md dispatch table (backend Go in `platform/` → `codex:codex-rescue`; frontend `src/` + all test code → Agent with `model: sonnet`; complex/cross-domain → Opus subagent)
+- plan-review gate dispatch at the plan's risk tier (`docs/reviewers.md`): Tier B = Claude self on Opus 5 + `codex:codex-rescue`; Tier A adds an independent fresh-context Opus reviewer + GLM
+- code-review gate dispatch at the plan's risk tier (`docs/reviewers.md`), all reviewers in parallel
 - `Bash` calls to `go test`, `vitest`, `playwright` (test runners)
 - `Bash` calls to `bun run test`, `bun run lint`, `bunx tsc --noEmit`, `bun run test:e2e`
 - `Bash` calls to read-only git / gh commands (`status`, `log`, `diff`, `pr view`, `pr checks`)
@@ -60,9 +60,9 @@ These ALWAYS pause and surface to the user, regardless of `pause_on=never`:
 - `git push --force` / `--force-with-lease` to any branch
 - `git reset --hard` on shared history
 - `git branch -D` on a branch with unmerged commits
-- `git checkout main` followed by `git commit` (direct commit to main is a CLAUDE.md violation)
-- `gh pr merge --admin` to main (covered separately by `auto_merge` — see below)
-- Edits to `CLAUDE.md`, `docs/coding-agent.md`, `docs/development-workflow.md`, `docs/reviewers.md`, or anything under `.github/workflows/` (process / architecture changes need human judgment)
+- `git checkout main` followed by `git commit` (direct commit to main is a AGENTS.md violation)
+- `gh pr merge --admin` to main — ALWAYS a hard safeguard pause, never performed by autopilot (`AGENTS.md`)
+- Edits to `AGENTS.md`, `docs/coding-agent.md`, `docs/development-workflow.md`, `docs/reviewers.md`, or anything under `.github/workflows/` (process / architecture changes need human judgment)
 - Edits that touch the secrets surface: `.env*` (other than `.env.example`), anything matching `*credentials*` / `*api_key*` / `*token*` patterns
 - Plan-scope expansion (adding deliverables not in the plan file's phases — autopilot can only complete what's already specified)
 - Any `gh` command that comments on / closes / reviews someone else's PR or issue
@@ -80,11 +80,46 @@ Even with `auto_merge=true`, the merge is BLOCKED (pause for user) if ANY of the
 | Lint / type-check FAILED | `bun run lint` or `bunx tsc --noEmit` exit code non-zero on the PR's HEAD commit |
 | Plan-scoped test FAILED | Any test matching the plan's component scope (vitest) or any Go test in packages touched by the diff failed |
 | Sensitive-path touch | PR diff touches any path in the "secrets surface" list above |
-| Missing integration test | PR adds a route in `platform/` (`r.Get/Post/Patch/Put/Delete(...)`) without a corresponding integration test (CLAUDE.md: every new Go API endpoint needs an integration test) |
-| Scope drift | PR diff includes files not listed in the plan file's "Files of interest" / "Phase scope", and they're not trivially-named test files |
+| Missing integration test | PR adds a route in `platform/` (`r.Get/Post/Patch/Put/Delete(...)`) without a corresponding integration test (AGENTS.md: every new Go API endpoint needs an integration test) |
+| Scope drift | PR diff includes files not listed in the plan file's `## File scope`, and they're not trivially-named test files |
 | Diff size 2× plan estimate | PR has more added lines than the plan's estimated total × 2 (heuristic — flags significant scope creep) |
+| **No required check** | `gh pr checks <num>` returns zero rows, or every row is advisory rather than required. See below — this one is not optional. |
+| **Scope snapshot mismatch** | The plan file's `## File scope` or its commit SHA differs from the values recorded at gate pass. See below. |
 
 If any guard fires, autopilot writes the reason to the state file, sends a PushNotification, and pauses. User says "merge" to override + ship anyway, or interrupts to investigate.
+
+### The required-check guard is load-bearing
+
+`auto_merge=true` is only safe because a *required* CI check has independently
+verified the branch. If no required check exists, the sole pre-merge evidence is a
+script this same agent ran on itself — which is not independent verification at all.
+
+So autopilot asserts at runtime, immediately before merging, that `gh pr checks`
+reports at least one **required** passing check. It does not assume the repository is
+configured correctly; branch-protection rules can be removed, and `.github/workflows/`
+can be reverted independently of this skill.
+
+Never merge with `--admin`. `--admin` exists precisely to bypass required checks, so
+using it would defeat this guard. It is a hard safeguard pause in `AGENTS.md`.
+
+### The scope snapshot
+
+"Scope is fixed at gate time" only means something if the value is *recorded*.
+Otherwise a resumed run re-reads whatever the plan file says now, and a widened scope
+looks identical to the original.
+
+At gate pass, write into the state file:
+
+```json
+"scope_snapshot": {
+  "plan_sha": "<git rev-parse HEAD:docs/plans/NNN-*.md>",
+  "file_scope": ["<each path from ## File scope>"]
+}
+```
+
+Every pre-flight re-derives both and compares. A mismatch means either the plan was
+edited after approval or the scope was widened mid-run — both are pauses, not warnings.
+Widening scope requires the user to say so explicitly, and the gate to be re-run.
 
 ## Stop conditions (pause_on)
 
@@ -121,7 +156,7 @@ Refuse to start if the plan-review gate has not cleared. Autopilot is not a subs
 
 Read the plan file to extract:
 - Phase list + per-phase status markers
-- Files of interest / Phase scope sections
+- `## File scope` section (REQUIRED — a plan without one cannot be gated)
 - Estimated diff size (if mentioned)
 
 Cross-reference with git:
@@ -138,12 +173,12 @@ Compute `start_phase`:
 
 For each phase from `start_phase` to `end_phase`:
 
-1. **Pre-flight check.** Re-read plan file (might have been edited mid-run). Confirm phase scope hasn't changed. If `scope_drift` is a `pause_on` trigger and the diff has expanded, pause.
-2. **Dispatch the work** per CLAUDE.md dispatch table. Backend phases (Go in `platform/`) → `codex:codex-rescue` subagent. Frontend phases (`src/`) + all test code → Agent with `model: sonnet`. Cross-cutting / glue work → Opus subagent inline.
+1. **Pre-flight check.** Re-read the plan file — it may have been edited mid-run. Re-derive the plan file's commit SHA and its `## File scope`, and compare both against `scope_snapshot` in the state file. Any mismatch pauses, regardless of `pause_on` settings: it means the approved scope is no longer the scope being executed. Then confirm the working diff has not expanded beyond that scope.
+2. **Dispatch the work** per AGENTS.md dispatch table. Backend phases (Go in `platform/`) → `codex:codex-rescue` subagent. Frontend phases (`src/`) + all test code → Agent with `model: sonnet`. Cross-cutting / glue work → Opus subagent inline.
 3. **Run phase tests.** Plan should specify which tests to run. If not, infer from changed paths: Go packages touched → `cd platform && go test ./... -count=1 -timeout 120s`; frontend files touched → `bun run test`; `bun run lint` + `bunx tsc --noEmit` always.
 4. **Fix loop.** If tests fail, dispatch a fix agent (Codex for backend, Sonnet for frontend) with the failure output. Re-run tests. Cap at `max_test_fix_attempts`.
-5. **Self-review.** Quick Claude inline check (on Opus 4.7) of the diff: any obvious omissions vs the plan's phase scope?
-6. **Commit phase.** `git commit -m "plan $plan_id phase $N: <plan's phase title>"`. Use a HEREDOC per CLAUDE.md commit conventions.
+5. **Self-review.** Quick Claude inline check (on Opus 5) of the diff: any obvious omissions vs the plan's phase scope?
+6. **Commit phase.** `git commit -m "plan $plan_id phase $N: <plan's phase title>"`. Use a HEREDOC per AGENTS.md commit conventions.
 7. **Update plan file.** Mark phase as COMPLETE with commit SHA. Run an `Edit` on the plan file.
 8. **Update state file.** Record phase complete + commit SHA + test results.
 9. **Notify (if `notify=push`).** PushNotification: "Plan-NNN Phase N committed."
@@ -152,17 +187,17 @@ For each phase from `start_phase` to `end_phase`:
 
 Already gated by Step 0 — autopilot won't start unless plan-review has cleared.
 
-### Step 4 — Code-review gate (3-way)
+### Step 4 — Code-review gate (risk-tiered)
 
 After ALL phases complete (or `end_phase` reached):
 
 1. Dispatch in parallel (single message, two Agent tool_use blocks):
    - `codex:codex-rescue` for technical / wire-shape verification
-   - `opencode:opencode-review` with `--model volcengine-plan/glm-5.1` for downstream-consumer / UX / observability (GLM is review-only — no code edits)
-2. Run Claude self-review inline on Opus 4.7.
-3. Record all findings in plan file's `## Code Review` section per `docs/code-review.md` format, tagged `[claude-self] / [codex] / [opencode:glm-5.1]`.
+   - `opencode:opencode-review` with `--model volcengine-plan/glm-5.2` for downstream-consumer / UX / observability (GLM is review-only — no code edits)
+2. Run Claude self-review inline on Opus 5.
+3. Record all findings in plan file's `## Code Review` section per `docs/code-review.md` format, tagged `[claude-self] / [codex] / [opus] / [glm]`.
 4. If `[OPEN] [BLOCKER]` or `[OPEN] [CONCERN]` findings exist:
-   - Dispatch fix agents per CLAUDE.md dispatch table
+   - Dispatch fix agents per AGENTS.md dispatch table
    - Commit fixes
    - Re-run gate (incrementing review-round counter)
    - At `max_review_rounds`, pause with state-summary
@@ -190,14 +225,14 @@ Before opening PR:
 
 ### Step 7 — Ship (auto_merge=true only)
 
-If `auto_merge=false` (default): END HERE. PushNotification "Plan-NNN ready to merge — `gh pr merge <num> --admin --squash --delete-branch`".
+If `auto_merge=false` (default): END HERE. PushNotification "Plan-NNN ready to merge — `gh pr merge <num> --squash --auto --delete-branch`".
 
 If `auto_merge=true`:
 
 1. Evaluate all auto-merge guards (see "Auto-merge guards" above).
 2. If ANY guard fires, write the reason to state file, PushNotification "Plan-NNN auto-merge BLOCKED: <reason>", pause.
 3. If all guards pass:
-   - `gh pr merge <num> --admin --squash --delete-branch`
+   - `gh pr merge <num> --squash --auto --delete-branch`
    - `git checkout main && git pull origin main`
    - Delete local feature branch
    - PushNotification "Plan-NNN auto-merged as <sha>".
@@ -266,7 +301,7 @@ Print a structured report:
 
 ## Constraints
 
-- **Reads CLAUDE.md + docs/development-workflow.md FIRST.** Both may have been edited since this skill was written. The skill's audit rules are summaries; the source-of-truth files are the actual contract.
+- **Reads AGENTS.md + docs/development-workflow.md FIRST.** Both may have been edited since this skill was written. The skill's audit rules are summaries; the source-of-truth files are the actual contract.
 - **One plan per invocation.** Autopilot doesn't chain — finish plan-185, then a new invocation for plan-186. Lets each run produce a clean state-file entry + post-execution report.
 - **No silent test skips.** If a test step is skipped (timeout, flaky, environment not ready, etc.), it's recorded in state file `notes` AND surfaced in the final report. Never silently treat a skip as a pass.
 - **State file is the recovery anchor.** If autopilot is interrupted, the next invocation reads the state file to resume from the last completed phase. Don't manually edit the state file unless instructed.
