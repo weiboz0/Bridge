@@ -56,7 +56,7 @@ Bridge's process becomes equivalent to PowerMarket's in rigor, with Bridge's sta
 
 ## Phase ordering
 
-Phases 1–3 are a **single atomic cutover** in one commit. Phases 4–7 are independently revertable. Phase 6 depends on Phase 4 only for `test-guards.sh`.
+Phases 1–3 are a **single atomic cutover** in one commit. Phases 4 and 7 are independently revertable. **Phases 5 and 6 are coupled** — 5 supplies the required check that makes 6's `auto_merge=true` safe, so they land together and revert together (see `## Rollback`). Phase 6 depends on Phase 4 only for `test-guards.sh`.
 
 ### Phase 1 — Governance files + tree hygiene
 
