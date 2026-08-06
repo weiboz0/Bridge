@@ -89,7 +89,7 @@ Always pause and surface to the user, regardless of operating mode.
 - **History and remote** — `git push --force`, `reset --hard` on shared history,
   a direct commit to `main`, `git branch -D` with unmerged commits,
   **`gh pr merge --admin`**, and any `gh` write against a PR the agent does not own.
-  Autopilot merges with `gh pr merge --squash --auto` only.
+  Autopilot merges with `gh pr merge --squash` only.
 
 - **Process** — file changes outside the plan's `## File scope`,
   unresolved `[OPEN]` findings at the review round-cap,

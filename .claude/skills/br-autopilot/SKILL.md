@@ -1,6 +1,6 @@
 ---
 name: br-autopilot
-description: Use when the user says "autopilot plan-NNN" / "run plan-NNN unattended" / "ship plan-NNN while I'm away" / "go autonomous on this plan". Pre-authorizes Claude to walk one named plan through the full Bridge cadence (Design→Plan→Build→Verify→Review→Ship) without per-step approval, while strictly enforcing AGENTS.md's CRITICAL rules (branch-first, plan-review gate, phase-by-phase commits, code-review gate, post-execution report). Three retry caps (review-rounds, test-fix-attempts, total-turns) prevent runaway loops; named stop conditions auto-pause and surface to the user. Optional auto_merge=true ships after PR. Read this file end-to-end before the first phase commit; the pre-auth allowlist is load-bearing.
+description: Use when the user says "autopilot plan-NNN" / "run plan-NNN unattended" / "ship plan-NNN while I'm away" / "go autonomous on this plan". Pre-authorizes Claude to walk one named plan through the full Bridge cadence (Design→Plan→Build→Verify→Review→Ship) without per-step approval, while strictly enforcing AGENTS.md's CRITICAL rules (branch-first, plan-review gate, phase-by-phase commits, code-review gate, post-execution report). Three retry caps (review-rounds, test-fix-attempts, total-turns) prevent runaway loops; named stop conditions auto-pause and surface to the user. auto_merge defaults to TRUE — runs through squash-merge; pass auto_merge=false to stop at the PR. Read this file end-to-end before the first phase commit; the pre-auth allowlist is load-bearing.
 ---
 
 # br-autopilot
@@ -27,7 +27,7 @@ Pre-authorize Claude to run ONE named Bridge plan from current state through mer
 | `plan_id` | **required** | Plan number, e.g. `185`. Skill reads `docs/plans/$plan_id-*.md`. |
 | `start_phase` | first incomplete phase (read from plan file) | Phase to start on. Use to resume after a manual interruption. |
 | `end_phase` | last phase | Stop after this phase (don't ship). Use when you want to autopilot a subset then review yourself. |
-| `auto_merge` | `false` | If `true`, squash-merge via `gh pr merge --squash --auto` after PR + green gates. NEVER `--admin`. See "Auto-merge guards" below — multiple conditions block the merge even when this is true. |
+| `auto_merge` | **`true`** | Squash-merge via `gh pr merge --squash` after PR + green gates. Not `--auto` — GitHub's auto-merge needs branch protection with required checks, which Bridge does not have; the attestation is the wait-for-green mechanism instead. NEVER `--admin`. Pass `auto_merge=false` to stop at the PR. See "Auto-merge guards" below — many conditions block the merge even at the default, and the gate-attestation guard in particular is not optional. |
 | `max_review_rounds` | `5` | Max fix-then-re-review cycles at any single gate (plan-review OR code-review). At cap with unresolved blockers → pause. |
 | `max_test_fix_attempts` | `5` | Max "edit → re-run failing tests" cycles per phase. At cap → pause. |
 | `max_total_turns` | `1000` | Global safety net. Counts assistant turns including tool calls. At cap → pause with a state-summary report. |
@@ -107,6 +107,21 @@ refuses unless **all** of these hold:
   does not exist in the PR.
 
 A failing run deletes the attestation rather than leaving a stale pass behind.
+
+**Operational consequence of `fast: false`.** The `pre-push` hook runs `--fast` when
+`E2E_BASE_URL` is unset, and a `--fast` attestation does not satisfy this guard. So on
+a machine with no booted stack, autopilot will open the PR and then **pause at the
+merge** rather than shipping — correctly, since E2E covers realtime sessions and auth
+flows. To get an unattended run all the way to merge, export `E2E_BASE_URL` against
+your own stack before starting, then run the full gate:
+
+```bash
+export E2E_BASE_URL=http://localhost:3101   # whatever NEXTJS_PORT says in .env
+bash scripts/ci-local.sh                     # no --fast
+```
+
+Do not work around this by relaxing the guard. A pause here means the riskiest tier
+never ran.
 
 Be honest about what this is: weaker than an independent CI check, because the agent
 that ran the gate is the agent asking to merge. It is a check against *forgetting*,
@@ -229,7 +244,7 @@ Before opening PR:
    - `bun run test:e2e` (requires Next.js + Go platform + Hocuspocus all running — skip if environment not available, record in state notes, do NOT treat skip as pass)
 2. Verify every new Go route in `platform/` has a corresponding integration test (happy + auth + error + cross-user isolation).
 3. Update plan file's `## Post-execution report` section.
-4. Cross-check the auto-merge guards (even if `auto_merge=false`, knowing the guard state is useful information for the user).
+4. Cross-check the auto-merge guards. Do this even when `auto_merge=false` — the guard state tells the user whether the PR is actually mergeable.
 
 ### Step 6 — Push + open PR
 
@@ -237,16 +252,16 @@ Before opening PR:
 2. `gh pr create` with title `Plan NNN: <description>` and body derived from the plan's summary + per-phase commits.
 3. Notify: PushNotification "Plan-NNN PR opened: <url>".
 
-### Step 7 — Ship (auto_merge=true only)
+### Step 7 — Ship (auto_merge=true, the default)
 
-If `auto_merge=false` (default): END HERE. PushNotification "Plan-NNN ready to merge — `gh pr merge <num> --squash --auto --delete-branch`".
+If `auto_merge=false` (explicitly passed): END HERE. PushNotification "Plan-NNN ready to merge — `gh pr merge <num> --squash --delete-branch`".
 
 If `auto_merge=true`:
 
 1. Evaluate all auto-merge guards (see "Auto-merge guards" above).
 2. If ANY guard fires, write the reason to state file, PushNotification "Plan-NNN auto-merge BLOCKED: <reason>", pause.
 3. If all guards pass:
-   - `gh pr merge <num> --squash --auto --delete-branch`
+   - `gh pr merge <num> --squash --delete-branch`
    - `git checkout main && git pull origin main`
    - Delete local feature branch
    - PushNotification "Plan-NNN auto-merged as <sha>".
@@ -326,7 +341,7 @@ Print a structured report:
 
 ```
 /br-autopilot plan_id=185                                     # default: stop at PR, wait for "merge"
-/br-autopilot plan_id=185 auto_merge=true                     # full unattended including merge
+/br-autopilot plan_id=185                                     # full unattended including merge (default)
 /br-autopilot plan_id=185 start_phase=3                       # resume from phase 3 (after manual interruption)
 /br-autopilot plan_id=185 end_phase=2                         # do phases 1+2 only, stop before phase 3
 /br-autopilot plan_id=185 dry_run=true                        # preview the action plan without executing

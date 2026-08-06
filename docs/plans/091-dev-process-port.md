@@ -37,7 +37,7 @@ Bridge's process becomes equivalent to PowerMarket's in rigor, with Bridge's sta
 | Fork | Decision | Source |
 |---|---|---|
 | Scope | Full port, adapted. | User |
-| Autopilot | Full lifecycle through squash-merge (`auto_merge=true`), expanded hard-safeguard list, **and a CI gate rebuilt to actually back it** (Phase 5). | User; Phase 5 hardened after round 2 |
+| Autopilot | Full lifecycle through squash-merge, `auto_merge` defaulting to **`true`**, expanded hard-safeguard list, and a locally-attested gate backing it (Phase 5). | User |
 | Gate width | Risk-tiered, with the complete routing rule in Phase 2. | User |
 | Skills | Adopt `chore/migrate-skills`, add three, un-ignore `.claude/skills/`. | User |
 | Claude slots | **Opus 5** in all four: plan-review self, plan-review independent, code-review self, code-review independent. Round-1's Fable pin failed mid-gate on quota. Fable documented as an optional substitute only. | Round-1 gate evidence |
@@ -56,7 +56,7 @@ Bridge's process becomes equivalent to PowerMarket's in rigor, with Bridge's sta
 
 ## Phase ordering
 
-Phases 1–3 are a **single atomic cutover** in one commit. Phases 4 and 7 are independently revertable. **Phases 5 and 6 are coupled** — 5 supplies the required check that makes 6's `auto_merge=true` safe, so they land together and revert together (see `## Rollback`). Phase 6 depends on Phase 4 only for `test-guards.sh`.
+Phases 1–3 are a **single atomic cutover** in one commit. Phases 4 and 7 are independently revertable. **Phases 5 and 6 are coupled** — 5 supplies the gate attestation that makes 6's `auto_merge=true` safe, so they land together and revert together (see `## Rollback`). Phase 6 depends on Phase 4 only for `test-guards.sh`.
 
 ### Phase 1 — Governance files + tree hygiene
 
@@ -152,7 +152,7 @@ That removes the independent remote check which was the entire justification for
    - **Scope-section migration.** The skill gates scope on `"Files of interest" / "Phase scope"` in six places (`SKILL.md:47,84,96,124,141,145`) and never on `## File scope`. Until that is migrated, new-format plans cannot be scope-gated at all — the Phase 1 safeguard would be inert. Migrate the wording *and* add a behaviour test that a new-format plan is correctly gated.
    - **Scope snapshot.** Persist the approved scope + plan-file SHA into the state file at gate pass; compare on every pre-flight (see Phase 1).
    - **Stale pin.** `SKILL.md:145` still says "on Opus 4.7".
-   - **`auto_merge=true` is enabled only after Phase 5's required check exists**, and the skill verifies at runtime that the PR has a required, non-advisory check before merging. Round 2 found that Phase 5 being "independently revertable" while Phase 6 enables auto-merge means reverting Phase 5 alone would leave an auto-merge-capable agent with only an advisory signal. A runtime check makes the coupling self-enforcing rather than dependent on revert discipline.
+   - **`auto_merge` defaults to `true`**, and the skill verifies at runtime that a valid gate attestation names the PR HEAD before merging. Round 2 found that Phase 5 being "independently revertable" while Phase 6 enables auto-merge would leave an auto-merge-capable agent gated by nothing. The runtime attestation check makes the coupling self-enforcing rather than dependent on revert discipline.
 3. Add three, specified rather than merely named (round 2 flagged them as unspecified):
    - **`br-live-tests`** — runs the gated LLM tier and E2E. Inputs: tier selector, explicit `E2E_BASE_URL`. Refuses to run if `E2E_BASE_URL` is unset or resolves to 3003/8002. Warns on cost before any provider-key-backed run.
    - **`br-debug-from-live-failure`** — takes one failing test name, collects test source, service logs, and recent git touches, and hands the bundle to the 2-way bug-investigation gate. Read-only; proposes no fix.
@@ -173,7 +173,7 @@ PowerMarket's LIVE-LLM-as-source-of-truth rule exists to validate *its own* GPU 
 
 Phases 1–3 are one commit; `git revert` restores the prior governance docs and `CODEX.md` is recoverable from history. Phases 4 and 7 are independently revertable.
 
-**Phases 5 and 6 are NOT independently revertable** and must be reverted together or in the order 6-then-5. Round 2 found the previous wording unsound: Phase 6 turns on `auto_merge=true` while Phase 5 supplies the required check that makes it safe, so reverting Phase 5 alone — including deleting its ruleset via `gh api -X DELETE` — would leave an auto-merge-capable agent gated by nothing but an advisory signal. The runtime required-check assertion added to `br-autopilot` (Phase 6 step 2) is the backstop if this ordering is violated anyway.
+**Phases 5 and 6 are NOT independently revertable** and must be reverted together or in the order 6-then-5. Round 2 found the previous wording unsound: Phase 6 turns on `auto_merge=true` while Phase 5 supplies the evidence that makes it safe, so reverting Phase 5 alone — removing `.githooks/pre-push` and the attestation logic — would leave an auto-merge-capable agent gated by nothing. The runtime attestation assertion in `br-autopilot` is the backstop if this ordering is violated anyway.
 
 `chore/migrate-skills` stays intact until this plan merges.
 
@@ -211,7 +211,7 @@ Round-1 findings re-audited by the reviewers who raised them: Opus 8 RESOLVED / 
 2. `[FIXED]` `[opus]` **The key-unset workaround is inert** — bun auto-loads `.env`'s seven keys; verified directly. → `--env-file=/dev/null`.
 3. `[FIXED]` `[glm]` **`ci.yml` was a strict subset of `ci-local.sh`**, so auto-merge fired on a signal that skipped every guard. → `ci.yml` now invokes `ci-local.sh`.
 4. `[FIXED]` `[opus]` Phase 5 could not go green — needed Postgres, `TEST_DATABASE_URL`, migrations, `HOCUSPOCUS_TOKEN_SECRET`. → Service container + secrets specified.
-5. `[FIXED]` `[opus]` No required-checks ruleset, so `--auto` merges on an advisory signal. → Ruleset added.
+5. `[FIXED]` `[opus]` No required-checks ruleset, so `--auto` merges on an advisory signal. → Ruleset added, then **superseded**: cloud CI was dropped by user decision and the commit-pinned gate attestation replaced it.
 6. `[FIXED]` `[opus]` `--admin` on the always-pause list contradicted `br-autopilot`'s admin-merge definition. → `--squash --auto`; Phase 6 step 2 updates the skill.
 7. `[FIXED]` `[opus]` Safeguards self-disabling via declared scope; this plan had no scope section. → `## File scope` added and made mandatory.
 8. `[FIXED]` `[glm]` `CODEX.md` grep still unachievable — the plan file's own references match it. → Excludes `docs/plans/`.
@@ -231,7 +231,7 @@ Round-1 findings re-audited by the reviewers who raised them: Opus 8 RESOLVED / 
 19. `[FIXED]` `[codex]` **`drizzle.config.ts:8` reads `DATABASE_URL`, never `TEST_DATABASE_URL`** — Phase 5's migration step could not have gone green, and an inherited `DATABASE_URL` would silently target production. → Phase 5 sets `DATABASE_URL` to the container; `ci-local.sh` and CI refuse to migrate unless it matches `_test$` or the ephemeral container. This also converts the database safeguard from advisory to enforced.
 20. `[FIXED]` `[codex]` **`br-autopilot` gates scope on `"Files of interest" / "Phase scope"`** (`SKILL.md:47,84,96,124,141,145`), never `## File scope` — so Revision 3's scope safeguard was inert in the skill meant to enforce it. → Phase 6 step 2 migrates the wording and adds a behaviour test.
 21. `[FIXED]` `[codex]` **"Scope is fixed at gate time" had no persistence mechanism** — the state schema stored no snapshot, so a resumed agent could not detect widening. → Approved scope + plan-file SHA recorded at gate pass, compared every pre-flight.
-22. `[FIXED]` `[codex]` **Phase 5/6 revert coupling** — Phase 6 enables auto-merge while Phase 5 supplies its required check, yet Phase 5 was called independently revertable. → Rollback section corrected, plus a runtime required-check assertion in `br-autopilot` as the backstop.
+22. `[FIXED]` `[codex]` **Phase 5/6 revert coupling** — Phase 6 enables auto-merge while Phase 5 supplies its evidence, yet Phase 5 was called independently revertable. → Rollback section corrected, plus a runtime attestation assertion in `br-autopilot` as the backstop.
 23. `[FIXED]` `[codex]` `db:migrate` as an unconditional always-pause contradicted Phase 5's required unattended CI migration. → Exception narrowly drawn to the ephemeral CI container, tied to the `DATABASE_URL` guard.
 24. `[FIXED]` `[codex]` Phase 4 claimed "Phase 7 adds `CI=1` guards" while Phase 7 only drafts plan 092 — a completion report could have claimed a kill switch that never shipped. → Reworded.
 25. `[FIXED]` `[codex]` `br-scenario-debug` could fix repeatedly with no plan or scope binding. → Requires a plan ID + `## File scope`.
@@ -284,7 +284,7 @@ Two of this plan's own earlier fixes were themselves wrong, caught before landin
 ### Known limitations
 
 1. **The local gate is the only gate, and it is self-attested.** The agent that runs `ci-local.sh` is the agent asking to merge, so the attestation defends against forgetting rather than against bypass. The `pre-push` hook has been exercised only on its branch-delete fast path; its full-gate path has never run for real, because nothing has been pushed.
-2. **`auto_merge` remains `false` and must stay so** until Phase 5's CI is proven green and a branch-protection ruleset marks both jobs required. The ruleset was not created — it is a remote write on an unpushed branch. `br-autopilot` now asserts a required check exists at runtime, so the coupling does not depend on anyone remembering this.
+2. **`auto_merge` defaults to `true`** (user decision, after cloud CI was dropped). The merge is still gated by the attestation guard: it must name the PR HEAD exactly, with `fast: false` and `tree_dirty: false`. Because the `pre-push` hook runs `--fast` when `E2E_BASE_URL` is unset, an unattended run on a machine with no booted stack will open the PR and pause at the merge rather than shipping. That is the intended behaviour, not a bug — a `--fast` run never exercised E2E.
 3. **E2E has never run in this environment**, deliberately — no pinned `E2E_BASE_URL` and the fixtures mutate data.
 4. **Revision 4 of this plan was never reviewed.** Rounds 1 and 2 both found blockers, including rounds where a previous round's fix was broken. The base rate suggests Revision 4 is not clean.
 5. **Historical data loss from finding #1 is unassessed.** Whether past `bun run test` invocations cost real data depends on how tests have been run; not determinable from here.
