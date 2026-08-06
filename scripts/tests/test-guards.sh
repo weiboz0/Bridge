@@ -90,6 +90,13 @@ expect 0 "migration guard selftest trips" bash "$REPO_ROOT/scripts/check-migrati
 # ── 10. pre-merge-guard rejects bad arguments rather than proceeding ─────────
 expect 2 "pre-merge-guard rejects unknown args" bash "$REPO_ROOT/scripts/pre-merge-guard.sh" --bogus
 
+# ── 11. lint ratchet ─────────────────────────────────────────────────────────
+# The selftest writes a violating file and asserts the ratchet trips. It caught a
+# real hole when first run: filtering to `git ls-files` alone ignored violations in
+# NEW untracked files, which is precisely the case an agent writing fresh code hits.
+expect 0 "lint ratchet passes on current tree" bash "$REPO_ROOT/scripts/check-lint-baseline.sh"
+expect 0 "lint ratchet trips on a new violation" bash "$REPO_ROOT/scripts/check-lint-baseline.sh" --selftest
+
 echo ""
 echo "guard tests: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

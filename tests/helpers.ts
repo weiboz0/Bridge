@@ -4,9 +4,46 @@ import postgres from "postgres";
 import * as schema from "@/lib/db/schema";
 import { nanoid } from "nanoid";
 
-const testClient = postgres(
-  process.env.DATABASE_URL || "postgresql://work@127.0.0.1:5432/bridge_test"
-);
+const TEST_DB_FALLBACK = "postgresql://work@127.0.0.1:5432/bridge_test";
+
+/**
+ * Refuse to connect to anything that isn't obviously a test database.
+ *
+ * This is a hard failure rather than a silent fallback, and it is load-bearing:
+ * `cleanupDatabase()` below runs `delete` against every table in `afterEach`, so a
+ * suite pointed at real data destroys it one test at a time.
+ *
+ * The previous `process.env.DATABASE_URL || <fallback>` form looked safe but was
+ * not — the fallback only applies when the variable is ABSENT, and `.env` sets
+ * `DATABASE_URL` to the development database while bun auto-loads `.env` for every
+ * `bun run`. So the documented `bun run test` truncated the real `bridge` database.
+ */
+function resolveTestDatabaseUrl(): string {
+  const url = process.env.DATABASE_URL || TEST_DB_FALLBACK;
+
+  let dbName: string;
+  try {
+    dbName = new URL(url).pathname.replace(/^\//, "");
+  } catch {
+    throw new Error(`[tests] DATABASE_URL is not a valid URL: ${url}`);
+  }
+
+  if (!dbName.endsWith("_test")) {
+    throw new Error(
+      `[tests] REFUSING TO RUN: DATABASE_URL points at database "${dbName}", ` +
+        `which does not end in "_test".\n` +
+        `  The test suite truncates every table after each test.\n` +
+        `  Point DATABASE_URL at a *_test database, or unset it to use the default ` +
+        `(${TEST_DB_FALLBACK}).\n` +
+        `  Note that bun auto-loads .env, so "unset" means overriding it: ` +
+        `DATABASE_URL=... bun run test`
+    );
+  }
+
+  return url;
+}
+
+const testClient = postgres(resolveTestDatabaseUrl());
 export const testDb = drizzle(testClient, { schema });
 
 export async function cleanupDatabase() {

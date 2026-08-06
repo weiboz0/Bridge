@@ -53,8 +53,12 @@ echo "Bridge local gate — repo $REPO_ROOT"
 
 # ── Static ───────────────────────────────────────────────────────────────────
 
-step "lint"       bun run lint
-step "type-check" bunx tsc --noEmit
+# Lint runs as a RATCHET, not a pass/fail on the raw count: main carries ~145
+# pre-existing violations across ~83 files. The ratchet fails on anything new and
+# tolerates what is recorded, so the gate is meaningful today instead of red until
+# plan 093 finishes the cleanup. See scripts/check-lint-baseline.sh.
+step "lint (ratchet)" bash scripts/check-lint-baseline.sh
+step "type-check"     bunx tsc --noEmit
 
 # ── Guards ───────────────────────────────────────────────────────────────────
 
@@ -67,9 +71,25 @@ step "guard: self-test"  bash scripts/tests/test-guards.sh
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 
-# --env-file=/dev/null is load-bearing: it is the ONLY thing keeping the live
-# provider suites from billing. Do not "simplify" this to `bun run test`.
-step "vitest" bun run --env-file=/dev/null test
+# Two independent hazards, two explicit overrides. Do NOT simplify this to
+# `bun run test`, and do not drop either half.
+#
+#   DATABASE_URL — .env points at the DEVELOPMENT database, bun auto-loads .env,
+#     and tests/helpers.ts truncates every table in afterEach. Pinning it to the
+#     test DB is what keeps the suite off real data. (tests/helpers.ts now also
+#     refuses a non-_test database outright, so this is belt and braces.)
+#
+#   *_API_KEY — tests/llm/*.test.ts call live provider endpoints, gated only by
+#     `skipIf(!key)`. Exporting them EMPTY makes skipIf fire; `unset` does not
+#     work, because bun re-reads the real values from .env.
+step "vitest" env \
+  DATABASE_URL="${TEST_DATABASE_URL:-postgresql://work@127.0.0.1:5432/bridge_test}" \
+  ANTHROPIC_API_KEY= \
+  OPENAI_API_KEY= \
+  GEMINI_API_KEY= \
+  DASHSCOPE_API_KEY= \
+  OPENROUTER_API_KEY= \
+  bun run test
 
 step "go test" bash -c 'cd platform && go test ./... -count=1 -timeout 120s'
 
