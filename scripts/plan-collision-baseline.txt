@@ -1,0 +1,15 @@
+# Accepted pre-existing plan-number collisions, one token per line.
+#
+# These predate the guard and are left alone deliberately — renumbering a merged
+# plan would break every inbound reference to it. New collisions are NOT allowed
+# here: renumber the newer plan instead. A line added to silence a fresh collision
+# defeats the entire point of the guard.
+#
+# 012 — 012-assignments.md, 012-monaco-editor-migration.md
+# 049 — 049-python-101-curriculum.md, 049-python-101-legacy-extract.md,
+#       049-python-101-throughput.md
+# 057 — 057-python-101-post-ship-validation.md, 057-python-101-smoke-checklist.md
+
+012
+049
+057

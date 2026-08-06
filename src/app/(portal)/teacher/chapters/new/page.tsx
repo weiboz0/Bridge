@@ -6,7 +6,11 @@ import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createChapter } from "@/lib/chapters"
+import { createChapter, type CreateChapterInput } from "@/lib/chapters"
+
+// Derived from the API input type rather than re-declared, so the select below
+// cannot drift from what createChapter actually accepts.
+type MaterialType = NonNullable<CreateChapterInput["materialType"]>
 
 interface OrgMembership {
   orgId: string
@@ -32,7 +36,7 @@ export default function CreateChapterPage() {
   const [gradeLevel, setGradeLevel] = useState("")
   const [subjectTags, setSubjectTags] = useState("")
   const [estimatedMinutes, setEstimatedMinutes] = useState("")
-  const [materialType, setMaterialType] = useState("notes")
+  const [materialType, setMaterialType] = useState<MaterialType>("notes")
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -225,7 +229,7 @@ export default function CreateChapterPage() {
           <select
             id="materialType"
             value={materialType}
-            onChange={(e) => setMaterialType(e.target.value)}
+            onChange={(e) => setMaterialType(e.target.value as MaterialType)}
             className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
           >
             <option value="notes">Notes (detailed explanations)</option>

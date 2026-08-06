@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Local CI. Bridge has no cloud CI by choice — this hook is the enforcement point.
+#
+# Install with: bash scripts/install-hooks.sh
+#
+# Runs the full gate before anything leaves the machine. On success ci-local.sh
+# writes an attestation naming the exact commit it verified; that attestation is
+# what `br-autopilot` checks before auto-merging, so a merge can never be
+# authorised by a gate run against different code.
+#
+# Bypass with `git push --no-verify` only when you have already run the gate by
+# hand and know why. It is not a shortcut for a red gate.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# Nothing to verify when the push deletes a ref.
+deleting=1
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  [[ "$local_sha" =~ ^0+$ ]] || deleting=0
+done
+if (( deleting )); then
+  exit 0
+fi
+
+echo "pre-push: running the local gate (scripts/ci-local.sh)"
+echo "          bypass with --no-verify only if you ran it yourself and know why"
+echo ""
+
+# E2E needs a booted stack and a pinned E2E_BASE_URL. When it is not set, run the
+# --fast tier rather than either failing closed (which would make every push
+# impossible) or silently aiming mutating fixtures at whatever is on :3003.
+if [[ -n "${E2E_BASE_URL:-}" ]]; then
+  bash scripts/ci-local.sh
+else
+  echo "note: E2E_BASE_URL unset — running --fast (E2E skipped)."
+  echo "      Export it against your own stack to include the E2E tier."
+  echo ""
+  bash scripts/ci-local.sh --fast
+fi

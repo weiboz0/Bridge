@@ -16,11 +16,20 @@
 
 ## Service Ports
 
-| Service | Default port | Override env var | Notes |
+| Service | Code default | Override env var | Notes |
 |---------|------|------|-------|
 | Next.js | 3003 | `NEXTJS_PORT` | Frontend; proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`) |
 | Go platform | 8002 | `PLATFORM_PORT` | API server |
 | Hocuspocus | 4000 | `HOCUSPOCUS_PORT` | Yjs collaboration |
+
+> **The code defaults are not what any given machine runs — read `.env`, don't assume.**
+> On the primary dev machine the stack is relocated (`NEXTJS_PORT=3101`, `PLATFORM_PORT=8100`,
+> fronted by nginx on 3100) because **other, unrelated services occupy 3003 and 8002 there**.
+> Never kill a process on those ports assuming it's a stale Bridge instance.
+>
+> This matters most for E2E: `e2e/playwright.config.ts` defaults `baseURL` to `http://localhost:3003`
+> and its seed fixture *creates classes and enrolls users*, so an unpinned run aims mutating setup
+> logic at whatever is listening there. Always export `E2E_BASE_URL`. See `docs/testing.md`.
 
 All three services must be running for E2E tests.
 
