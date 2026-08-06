@@ -9,7 +9,7 @@
 Round-2 review found the governance-doc safeguard keys on "the plan file's declared file scope" while no plan actually declares one — including this plan. That section is now mandatory in the plan template (Phase 2) and appears here first.
 
 This plan modifies, and only modifies:
-`AGENTS.md` · `CLAUDE.md` · `CODEX.md` (delete) · `.gitignore` · `docs/{development-workflow,reviewers,coding-agent,code-review,project-structure}.md` · `docs/bug-investigation-gate.md` (new) · `docs/architecture/decisions.md` (new) · `docs/testing.md` (new) · `docs/plans/09{1,2}-*.md` · `scripts/**` · `.github/workflows/**` · `.claude/skills/**`
+`AGENTS.md` · `CLAUDE.md` · `CODEX.md` (delete) · `.gitignore` · `docs/{development-workflow,reviewers,coding-agent,code-review,project-structure}.md` · `docs/bug-investigation-gate.md` (new) · `docs/architecture/decisions.md` (new) · `docs/testing.md` (new) · `docs/plans/09{1,2}-*.md` · `scripts/**` · `.githooks/**` · `.claude/skills/**`
 
 It changes **no** file under `platform/`, `src/`, `e2e/`, `drizzle/`, or `tests/`.
 
@@ -75,7 +75,7 @@ Phases 1–3 are a **single atomic cutover** in one commit. Phases 4 and 7 are i
 - *Processes and ports*: never kill a process; **never run E2E without a pinned `E2E_BASE_URL`** (see Phase 4). Ports 3003/8002 host other services on this machine.
 - *History and remote*: `git push --force`, `reset --hard` on shared history, direct commit to `main`, `git branch -D` with unmerged commits, **`gh pr merge --admin`**, any `gh` write against a PR the agent does not own.
 - *Process*: file changes outside `## File scope`; unresolved `[OPEN]` at the review round-cap; a failing `pre-merge-guard.sh` or `ci-local.sh`.
-- *Governance docs*: `AGENTS.md`, the `CLAUDE.md` pointer, `docs/{coding-agent,development-workflow,reviewers}.md`, `.github/workflows/` — **unless declared in `## File scope`**, which requires the user to have approved that scope when the plan cleared its gate. Round 2 correctly noted the scope hatch is self-granting; the mitigation is that scope is fixed at gate time and any later widening is itself an always-pause.
+- *Governance docs*: `AGENTS.md`, the `CLAUDE.md` pointer, `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`, `scripts/ci-local.sh` — **unless declared in `## File scope`**, which requires the user to have approved that scope when the plan cleared its gate. Round 2 correctly noted the scope hatch is self-granting; the mitigation is that scope is fixed at gate time and any later widening is itself an always-pause.
 - *Judgment forks*: surface genuine scope / architecture / trust-model / breaking-change decisions via `AskUserQuestion`. **Under autopilot this halts the run** — it does not proceed on a default. Round 2 found "then proceed" undefined for unattended mode; a fork is a stop, and the run resumes when answered.
 
 **Verification:** `git check-ignore .codex-buddy` exits 0. For `CODEX.md`: `grep -rl 'CODEX\.md' --include='*.md' . | grep -v '^./docs/plans/'` returns only `docs/reviews/` paths — round 2 showed the previous form matched this plan file's own five references and could never pass.
@@ -92,11 +92,11 @@ Phases 1–3 are a **single atomic cutover** in one commit. Phases 4 and 7 are i
 
 **Risk-tier routing rule.** Round 2 judged Revision 2's category list "a partial partition with a tiebreaker, not a routing rule". Replaced with a total function over the plan's declared `## File scope`:
 
-- **Tier A → 4-way.** Any scope touching: `platform/internal/{middleware,store,llm,tools,skills}/**`, `drizzle/**`, `server/hocuspocus.ts`, `scripts/**`, `.github/**`, or the governance docs.
+- **Tier A → 4-way.** Any scope touching: `platform/internal/{middleware,store,llm,tools,skills}/**`, `drizzle/**`, `server/hocuspocus.ts`, `scripts/**`, `.githooks/**`, or the governance docs.
 - **Tier B → 2-way.** Scope lying *entirely* within `src/**` with no API-contract change, `content/**`, or `docs/**` excluding governance docs.
 - **Precedence:** one Tier-A path makes the whole plan Tier A. Plans are never split across tiers.
 - **Default:** any path matching neither list is Tier A.
-- **Worked example (this plan):** scope includes `scripts/**` and `.github/**` → **Tier A, 4-way.** Which is what was actually run — round 2 noted Revision 2's rule would have nominally routed it to 2-way.
+- **Worked example (this plan):** scope includes `scripts/**` and `.githooks/**` → **Tier A, 4-way.** Which is what was actually run — round 2 noted Revision 2's rule would have nominally routed it to 2-way.
 
 **Verification:** a scripted check confirms every cross-reference among the six docs resolves to a real file and heading; no doc still claims an unconditional 2-way or 3-way gate.
 
@@ -131,19 +131,19 @@ Scripts: `check-plan-uniqueness.sh` (with PowerMarket's `--selftest`), `check-sp
 
 **Verification:** `test-guards.sh` passes; `pre-merge-guard.sh` passes on this branch; each checker fails on its injected-collision selftest; `ci-local.sh` is confirmed to make zero outbound API calls.
 
-### Phase 5 — CI workflow and branch protection
+### Phase 5 — Local CI (revised: no cloud CI)
 
-Round 2 called Revision 2's version a blocker from both sides: GLM found `ci.yml` ran a strict subset of the guards, so GitHub would auto-merge on a green signal that never checked collisions, conflict markers, or semantic breaks; Opus found it could not go green at all, since the suites need Postgres and secrets the phase never named. Both are addressed:
+**Superseded by user decision.** The original phase added `.github/workflows/ci.yml` with a Postgres service container and a branch-protection ruleset. Bridge now runs **no cloud CI at all** — `scripts/ci-local.sh` is the only gate. The workflow was written, committed (`1cb6ca9`), and then removed.
 
-1. **`ci.yml` invokes `bash scripts/ci-local.sh`** — not a reimplemented subset. One gate definition, used locally and remotely.
-2. **Service container:** `postgres:16`. The migration step sets **`DATABASE_URL`** to the container — not `TEST_DATABASE_URL`, which round 2 found `drizzle.config.ts:8` never reads, so the step as previously specified could not have gone green. `TEST_DATABASE_URL` is set alongside it for the Go store tests, which do read it. Plus `HOCUSPOCUS_TOKEN_SECRET` and `NEXTAUTH_SECRET` from repo secrets. Provider API keys are deliberately **not** supplied, so the LLM suites skip.
-3. **E2E in CI** starts its own stack and sets `E2E_BASE_URL` explicitly against it — satisfying Phase 4 constraint 2, and the reason CI is a *better* E2E host than this machine.
-4. **Branch-protection ruleset** on `main` making the `ci` check required. Without it `--auto` merges on an advisory signal.
-5. Autopilot merges with `gh pr merge --squash --auto`; `--admin` remains an always-pause.
+That removes the independent remote check which was the entire justification for `auto_merge=true`, so the evidence chain is rebuilt locally:
 
-Creating `.github/workflows/` is on the hard-safeguard list; this phase is the user-authorized exception, and it is declared in `## File scope`.
+1. **`.githooks/pre-push`** runs the gate before anything leaves the machine. Installed per clone by `bash scripts/install-hooks.sh`, which sets `core.hooksPath` so the hook is version-controlled rather than hidden in an untracked `.git/hooks`.
+2. **Gate attestation.** A passing `ci-local.sh` writes `.claude/ci-local-attestation.json` recording the commit, branch, `tree_dirty`, and `fast`. A *failing* run deletes it, so a stale pass cannot vouch for a broken tree.
+3. **`br-autopilot` refuses to merge** unless the attestation names the PR HEAD exactly, with `fast: false` and `tree_dirty: false`. "The branch passed recently" says nothing about the commit being merged.
 
-**Verification:** the workflow runs green on this PR; `gh pr checks` returns real rows; a deliberately-introduced plan-number collision is confirmed to turn the check red.
+**Honest limitation.** This is weaker than a required cloud check: the agent that ran the gate is the agent asking to merge. It defends against forgetting, not against a determined bypass. `--admin` remains an always-pause; `--no-verify` is for pushes where the gate was already run by hand.
+
+**Verification:** hooks install and `core.hooksPath` is set; the hook exits 0 without running the gate on a branch-delete push; a passing run writes an attestation naming the correct SHA; `--fast` and dirty-tree runs are correctly marked insufficient for merge. All confirmed.
 
 ### Phase 6 — Skills
 
@@ -253,7 +253,7 @@ All seven phases implemented. Two follow-up plans drafted. Nothing pushed.
 |---|---|
 | 1–3 (atomic) | `AGENTS.md` canonical with enumerated hard safeguards; `CLAUDE.md` reduced to a pointer; `CODEX.md` deleted; workflow/reviewer/dispatch docs rewritten; new `bug-investigation-gate.md`, `architecture/decisions.md` (9 entries), `testing.md`; `project-structure.md` stale ports corrected. |
 | 4 | Seven guard scripts + shared `lib/uniqueness.sh` + non-empty `plan-collision-baseline.txt` + `ci-local.sh` + `tests/test-guards.sh` (20 assertions). |
-| 5 | `.github/workflows/ci.yml` — two jobs, `gate` shelling out to `ci-local.sh` so CI cannot drift from local. |
+| 5 | **Revised mid-flight**: cloud CI dropped by user decision. `.githooks/pre-push` + a commit-pinned gate attestation replace it as the merge evidence. |
 | 6 | `chore/migrate-skills` merged (4 skills), all updated for the new gates, 3 new skills written. 7 tracked under `.claude/skills/`. |
 | 7 | Plans 092 (LLM test gating) and 093 (lint debt) drafted. |
 
@@ -283,7 +283,7 @@ Two of this plan's own earlier fixes were themselves wrong, caught before landin
 
 ### Known limitations
 
-1. **`.github/workflows/ci.yml` has never executed.** It cannot until the branch is pushed. Its YAML parses and every path it references exists; nothing further is verified.
+1. **The local gate is the only gate, and it is self-attested.** The agent that runs `ci-local.sh` is the agent asking to merge, so the attestation defends against forgetting rather than against bypass. The `pre-push` hook has been exercised only on its branch-delete fast path; its full-gate path has never run for real, because nothing has been pushed.
 2. **`auto_merge` remains `false` and must stay so** until Phase 5's CI is proven green and a branch-protection ruleset marks both jobs required. The ruleset was not created — it is a remote write on an unpushed branch. `br-autopilot` now asserts a required check exists at runtime, so the coupling does not depend on anyone remembering this.
 3. **E2E has never run in this environment**, deliberately — no pinned `E2E_BASE_URL` and the fixtures mutate data.
 4. **Revision 4 of this plan was never reviewed.** Rounds 1 and 2 both found blockers, including rounds where a previous round's fix was broken. The base rate suggests Revision 4 is not clean.

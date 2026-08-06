@@ -62,7 +62,7 @@ These ALWAYS pause and surface to the user, regardless of `pause_on=never`:
 - `git branch -D` on a branch with unmerged commits
 - `git checkout main` followed by `git commit` (direct commit to main is a AGENTS.md violation)
 - `gh pr merge --admin` to main — ALWAYS a hard safeguard pause, never performed by autopilot (`AGENTS.md`)
-- Edits to `AGENTS.md`, `docs/coding-agent.md`, `docs/development-workflow.md`, `docs/reviewers.md`, or anything under `.github/workflows/` (process / architecture changes need human judgment)
+- Edits to `AGENTS.md`, `docs/coding-agent.md`, `docs/development-workflow.md`, `docs/reviewers.md`, `.githooks/`, or `scripts/ci-local.sh` (process / architecture changes need human judgment; the hook and gate script are the only pre-merge check Bridge has)
 - Edits that touch the secrets surface: `.env*` (other than `.env.example`), anything matching `*credentials*` / `*api_key*` / `*token*` patterns
 - Plan-scope expansion (adding deliverables not in the plan file's phases — autopilot can only complete what's already specified)
 - Any `gh` command that comments on / closes / reviews someone else's PR or issue
@@ -83,24 +83,38 @@ Even with `auto_merge=true`, the merge is BLOCKED (pause for user) if ANY of the
 | Missing integration test | PR adds a route in `platform/` (`r.Get/Post/Patch/Put/Delete(...)`) without a corresponding integration test (AGENTS.md: every new Go API endpoint needs an integration test) |
 | Scope drift | PR diff includes files not listed in the plan file's `## File scope`, and they're not trivially-named test files |
 | Diff size 2× plan estimate | PR has more added lines than the plan's estimated total × 2 (heuristic — flags significant scope creep) |
-| **No required check** | `gh pr checks <num>` returns zero rows, or every row is advisory rather than required. See below — this one is not optional. |
+| **No valid gate attestation** | `.claude/ci-local-attestation.json` is missing, names a commit other than the PR HEAD, reports `"fast": true`, or reports `"tree_dirty": true`. See below — this one is not optional. |
 | **Scope snapshot mismatch** | The plan file's `## File scope` or its commit SHA differs from the values recorded at gate pass. See below. |
 
 If any guard fires, autopilot writes the reason to the state file, sends a PushNotification, and pauses. User says "merge" to override + ship anyway, or interrupts to investigate.
 
-### The required-check guard is load-bearing
+### The gate-attestation guard is load-bearing
 
-`auto_merge=true` is only safe because a *required* CI check has independently
-verified the branch. If no required check exists, the sole pre-merge evidence is a
-script this same agent ran on itself — which is not independent verification at all.
+**Bridge runs no cloud CI.** `scripts/ci-local.sh` is the only gate, so the entire
+pre-merge evidence chain is one local run — and a local run only means something if
+you can show *which commit* it verified.
 
-So autopilot asserts at runtime, immediately before merging, that `gh pr checks`
-reports at least one **required** passing check. It does not assume the repository is
-configured correctly; branch-protection rules can be removed, and `.github/workflows/`
-can be reverted independently of this skill.
+That is what the attestation is for. On success `ci-local.sh` writes
+`.claude/ci-local-attestation.json` recording the commit, the branch, whether the tree
+was dirty, and whether the run was `--fast`. Before merging, autopilot reads it and
+refuses unless **all** of these hold:
 
-Never merge with `--admin`. `--admin` exists precisely to bypass required checks, so
-using it would defeat this guard. It is a hard safeguard pause in `AGENTS.md`.
+- `commit` equals the PR's HEAD SHA exactly. Not "the branch passed recently" — this
+  commit. A gate run against earlier code proves nothing about what is being merged.
+- `fast` is `false`. A `--fast` run skipped E2E, which on this repo is the tier
+  covering realtime sessions and auth flows.
+- `tree_dirty` is `false`. A gate run over uncommitted changes verified something that
+  does not exist in the PR.
+
+A failing run deletes the attestation rather than leaving a stale pass behind.
+
+Be honest about what this is: weaker than an independent CI check, because the agent
+that ran the gate is the agent asking to merge. It is a check against *forgetting*,
+not against a determined bypass. Treat a missing or mismatched attestation as a hard
+stop, never as something to regenerate by re-running the gate until it passes.
+
+Never merge with `--admin`. It exists to bypass checks, and it is a hard safeguard
+pause in `AGENTS.md`.
 
 ### The scope snapshot
 

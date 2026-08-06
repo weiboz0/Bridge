@@ -139,7 +139,9 @@ that look wrong at first read.
 6. **Run `bash scripts/pre-merge-guard.sh`** to catch collisions parallel sessions introduced.
 7. **Push** and **create the PR** via `gh pr create`, title `Plan NNN: <description>`.
    Body: phases shipped, cross-phase test plan, review summary.
-8. **Check `gh pr checks <number>`.** Merge with `gh pr merge --squash --auto`.
+8. **Confirm the gate attestation names this exact commit** — `.claude/ci-local-attestation.json`.
+   Bridge has no cloud CI, so this is the merge evidence, and a run against an earlier commit does not count.
+   Merge with `gh pr merge --squash`.
    Never `--admin` past a failing gate — that is a hard safeguard.
 
 ---

@@ -10,13 +10,13 @@ Tier is a function of the plan's `## File scope`, not a judgment call.
 
 - **Tier A → 4-way.** Any scope touching
   `platform/internal/{middleware,store,llm,tools,skills}/**`, `drizzle/**`, `server/hocuspocus.ts`,
-  `scripts/**`, `.github/**`, or the governance docs.
+  `scripts/**`, `.githooks/**`, or the governance docs.
 - **Tier B → 2-way.** Scope lying *entirely* within `src/**` with no API-contract change,
   `content/**`, or `docs/**` excluding governance docs.
 - **Precedence.** One Tier-A path makes the whole plan Tier A. Plans are never split across tiers.
 - **Default.** Any path matching neither list is Tier A.
 
-*Worked example.* Plan 091's scope includes `scripts/**` and `.github/**` → Tier A → 4-way.
+*Worked example.* Plan 091's scope includes `scripts/**` and `.githooks/**` → Tier A → 4-way.
 
 ## Reviewer roster
 

@@ -22,6 +22,9 @@ cd "$REPO_ROOT"
 FAST=0
 [[ "${1:-}" == "--fast" ]] && FAST=1
 
+# Machine-local, gitignored under .claude/*. See the Attestation block at the end.
+ATTESTATION="$REPO_ROOT/.claude/ci-local-attestation.json"
+
 FAILED=()
 step() {
   local name="$1"; shift
@@ -116,9 +119,35 @@ echo ""
 if (( ${#FAILED[@]} )); then
   echo "GATE FAILED — ${#FAILED[@]} step(s):" >&2
   printf '  ✗ %s\n' "${FAILED[@]}" >&2
+  # Remove any stale attestation: a previous pass must not vouch for this tree.
+  rm -f "$ATTESTATION"
   exit 1
 fi
 
+# ── Attestation ──────────────────────────────────────────────────────────────
+#
+# Bridge runs no cloud CI, so this file IS the merge evidence. It records WHICH
+# commit passed, because "the gate passed" is worthless without that — a run
+# against different code proves nothing about what is being merged.
+#
+# br-autopilot refuses to auto-merge unless this names HEAD exactly and reports a
+# full (non---fast) run. Machine-local by design: .claude/ is gitignored, so the
+# attestation cannot be committed and then trusted on another machine.
+mkdir -p "$(dirname "$ATTESTATION")"
+cat > "$ATTESTATION" <<JSON
+{
+  "commit": "$(git rev-parse HEAD)",
+  "branch": "$(git rev-parse --abbrev-ref HEAD)",
+  "tree_dirty": $(if [[ -n "$(git status --porcelain)" ]]; then echo true; else echo false; fi),
+  "fast": $(if (( FAST )); then echo true; else echo false; fi),
+  "e2e": $(if (( FAST )) || [[ -z "${E2E_BASE_URL:-}" ]]; then echo false; else echo true; fi),
+  "passed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+JSON
+
 echo "GATE PASSED"
-[[ $FAST -eq 1 ]] && echo "NOTE: --fast run. Not sufficient for merge."
+echo "attestation: $ATTESTATION ($(git rev-parse --short HEAD))"
+if (( FAST )); then
+  echo "NOTE: --fast run. E2E did not run, so this is NOT sufficient for merge."
+fi
 exit 0

@@ -96,8 +96,9 @@ Always pause and surface to the user, regardless of operating mode.
   and a failing `pre-merge-guard.sh` or `ci-local.sh`.
 
 - **Governance docs** — `AGENTS.md`, the `CLAUDE.md` pointer,
-  `docs/{coding-agent,development-workflow,reviewers}.md`, and `.github/workflows/`,
+  `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`, and `scripts/ci-local.sh`,
   unless declared in the plan's `## File scope` at gate time.
+  The hook and the gate script are governance: weakening either removes the only pre-merge check Bridge has.
 
 - **Judgment forks** — surface genuine scope, architecture, trust-model, or breaking-change decisions
   via `AskUserQuestion`.
@@ -183,7 +184,11 @@ Includes new endpoints, changed schemas, new features, env-var changes, and setu
   It catches plan-number, spec-number, and migration-prefix collisions that parallel sessions introduce,
   plus conflict markers and semantic breaks.
   Renumber the newer artifact; never silence the guard.
-- Check `gh pr checks <number>` before merging. Don't merge with failing checks.
+- **Bridge runs no cloud CI — the local gate is the only gate.**
+  `bash scripts/ci-local.sh` must pass on the exact commit being merged.
+  A passing run writes an attestation naming that commit; a run against different code is not evidence.
+  The `pre-push` hook enforces this — install it once per clone with `bash scripts/install-hooks.sh`.
+  `--no-verify` exists for when you have already run the gate yourself, not for getting past a red one.
 - Do not push to remote unless explicitly asked.
 - Commit messages lead with WHAT changed and WHY.
 - Never commit `.env`, credentials, or large binaries.
