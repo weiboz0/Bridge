@@ -79,7 +79,11 @@ export default function JoinByTokenPage() {
         `/student/classes/${state.classId}/session/${state.sessionId}`
       );
     } else {
-      router.replace(`/student/sessions/${state.sessionId}`);
+      // Plan 090 phase 5: a class-less join routes through the role-neutral
+      // /sessions room instead of /student/sessions — the joiner may hold
+      // no student role at all (e.g. a plain registered user joining an
+      // ad-hoc session by link).
+      router.replace(`/sessions/${state.sessionId}`);
     }
   }, [state, router]);
 

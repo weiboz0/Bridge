@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
@@ -47,6 +48,21 @@ export default async function OnboardingPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Plan 090 Decision 9 — /sessions is reachable by any authenticated
+              user regardless of role, so surface it here rather than gating
+              a brand-new zero-role user behind a role assignment they don't
+              have yet. */}
+          <div className="border rounded-lg p-4 space-y-2 border-primary/40">
+            <h3 className="font-medium">Browse or start a live session</h3>
+            <p className="text-sm text-muted-foreground">
+              Any registered user can host an ad-hoc session or join a public
+              one — no class required.{" "}
+              <Link href="/sessions" className="font-medium text-primary underline">
+                Go to Sessions
+              </Link>
+            </p>
+          </div>
+
           {isStudent && (
             <div className="border rounded-lg p-4 space-y-2 border-primary/40">
               <h3 className="font-medium">You&apos;re set up as a student</h3>

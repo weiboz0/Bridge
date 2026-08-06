@@ -79,8 +79,16 @@ export function StartSessionButton({
       return;
     }
 
+    // Plan 090 phase 5: a class-less (ad-hoc) session has no classId in the
+    // create response — route its host to the role-neutral /sessions room
+    // so a non-teacher host isn't bounced by the /teacher portal's role
+    // gate. A class-bound session keeps the existing teacher portal route.
     const session = await res.json();
-    router.push(`/teacher/sessions/${session.id}`);
+    if (session.classId) {
+      router.push(`/teacher/sessions/${session.id}`);
+    } else {
+      router.push(`/sessions/${session.id}`);
+    }
   }
 
   async function handleStart() {

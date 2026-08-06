@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { portalConfigs, getPortalConfig } from "@/lib/portal/nav-config";
+import { portalConfigs, getPortalConfig, withSessionsNavItem } from "@/lib/portal/nav-config";
 
 describe("nav-config", () => {
   it("has configs for all 5 portals", () => {
@@ -16,9 +16,12 @@ describe("nav-config", () => {
   // Plan 040 phase 7: parent nav has only Dashboard until a real
   // children list view ships. The previous /parent/children redirect-only
   // entry was a phantom nav item and is removed.
-  it("parent nav has Dashboard only", () => {
-    expect(portalConfigs.parent.navItems).toHaveLength(1);
+  // Plan 090 phase 5: parent additionally gets the role-neutral "Sessions"
+  // entry (Decision 9) — still no /parent/children.
+  it("parent nav has Dashboard and Sessions only", () => {
+    expect(portalConfigs.parent.navItems).toHaveLength(2);
     expect(portalConfigs.parent.navItems[0].href).toBe("/parent");
+    expect(portalConfigs.parent.navItems[1].href).toBe("/sessions");
   });
 
   // Plan 083: Schedule and Reports are not real teacher product surfaces
@@ -108,5 +111,63 @@ describe("nav-config", () => {
         }
       }
     }
+  });
+
+  // Plan 090 phase 5, Decision 9 — every portal role gets a "Sessions" entry
+  // pointing at the role-neutral /sessions hub. withSessionsNavItem() in
+  // nav-config.ts is idempotent by href OR label, so a role that already
+  // has an equivalent entry (teacher's own /teacher/sessions) never ends
+  // up with two "Sessions"-labeled items, and a role with none gets the
+  // neutral href added exactly once — even if the helper runs again.
+  describe("Sessions nav entry (plan 090)", () => {
+    it("every role config has exactly one 'Sessions'-labeled entry", () => {
+      for (const [role, config] of Object.entries(portalConfigs)) {
+        const matches = config.navItems.filter((item) => item.label === "Sessions");
+        expect(matches, `${role} nav should have exactly one Sessions entry`).toHaveLength(1);
+      }
+    });
+
+    it("adds the neutral /sessions href for roles without an existing Sessions entry", () => {
+      for (const [role, config] of Object.entries(portalConfigs)) {
+        if (role === "teacher") continue; // asserted separately below
+        const sessionsItem = config.navItems.find((item) => item.label === "Sessions");
+        expect(sessionsItem?.href, `${role} Sessions entry`).toBe("/sessions");
+      }
+    });
+
+    it("teacher keeps its existing /teacher/sessions entry instead of a duplicate 'Sessions' label", () => {
+      const sessionsItems = portalConfigs.teacher.navItems.filter(
+        (item) => item.label === "Sessions"
+      );
+      expect(sessionsItems).toHaveLength(1);
+      expect(sessionsItems[0].href).toBe("/teacher/sessions");
+    });
+
+    it("withSessionsNavItem is idempotent — running it again never adds a second Sessions entry", () => {
+      for (const config of Object.values(portalConfigs)) {
+        // config.navItems already went through withSessionsNavItem once (at
+        // module load). Run it again, simulating "already present" / a
+        // second invocation, and confirm the count doesn't change.
+        const before = config.navItems.filter((item) => item.label === "Sessions").length;
+        const ranTwice = withSessionsNavItem(config.navItems);
+        const after = ranTwice.filter((item) => item.label === "Sessions").length;
+        expect(after).toBe(before);
+        expect(after).toBe(1);
+        expect(ranTwice).toHaveLength(config.navItems.length);
+      }
+    });
+
+    it("withSessionsNavItem adds the entry to a fresh array missing it", () => {
+      const before = [{ label: "Dashboard", href: "/x", icon: "layout-dashboard" }];
+      const after = withSessionsNavItem(before);
+      expect(after).toHaveLength(2);
+      expect(after[1]).toEqual({ label: "Sessions", href: "/sessions", icon: "video" });
+    });
+
+    it("withSessionsNavItem skips a role that already has a 'Sessions'-labeled entry with a different href", () => {
+      const before = [{ label: "Sessions", href: "/teacher/sessions", icon: "video" }];
+      const after = withSessionsNavItem(before);
+      expect(after).toEqual(before);
+    });
   });
 });

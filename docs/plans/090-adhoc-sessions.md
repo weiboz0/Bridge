@@ -116,7 +116,13 @@ Must land BEFORE the frontend route (Codex ordering finding — the neutral shel
 - Leave `primaryPortalPath` for brand-new zero-role users as `/onboarding` (Decision 9 — no history heuristic).
 - Tests: zero-role authenticated user is admitted to the neutral shell; role-specific portals still gate.
 
-### Phase 5 — Frontend: neutral routes, browse, host reachability, visibility toggle *(Sonnet)*
+### Phase 5 — Frontend: neutral routes, browse, host reachability, visibility toggle — ✅ COMPLETE
+Built by Sonnet, verified inline (tsc clean, lint ratchet clean, 768/768 unit tests). Three sub-decisions beyond the plan text, all reviewed and kept:
+- **Nav dedup by href *or label*, not href alone.** Teacher already has a "Sessions"-labelled entry (`/teacher/sessions`); adding a second labelled "Sessions" would duplicate the label, so teacher is skipped. Admin/org_admin/student/parent gain `Sessions → /sessions`.
+- **Visibility toggle self-determines host** via `GET /api/sessions/{id}` + `useSession()` (host == `teacherId` or platform admin) rather than a new prop — `TeacherHeader` also mounts for class-bound non-owning instructors, for whom the PATCH is backend-forbidden. Client gate mirrors the backend; backend PATCH is the real enforcement.
+- **Dispatcher overrides `returnPath` to `/sessions` for class-less sessions.** Go's teacher-page/student-page hardcode `/teacher`/`/student`, which would bounce a roleless host/guest through a role gate. Class-bound `returnPath` untouched.
+
+Original spec (kept for reference):
 - `src/app/(portal)/sessions/layout.tsx` → `PortalShell portalRole={null}`.
 - `/sessions` browse page: list from `GET /api/sessions/public` (title, host, count, started-at, Join) + "Start a session" (`StartSessionButton mode="orphan"`, available to any user).
 - `/sessions/[id]` room: fetch `teacher-page` first; if 200 → `TeacherDashboard` (host), else `student-page` → `StudentSession`. Reuse existing components.
