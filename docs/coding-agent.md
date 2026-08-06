@@ -8,9 +8,9 @@ implementation to a subagent whose model matches what the code *is* — not how 
 
 | Domain | Agent | Dispatch | Why |
 |--------|-------|----------|-----|
-| **Backend** — Go in `platform/`, `server/hocuspocus.ts` | Codex | `codex:codex-rescue` subagent | Go's conventions here are tight (Chi, store/handler split, parameterized SQL, `slog`, RFC3339). Codex follows them well from one brief. |
-| **Frontend** — Next.js App Router, React, `src/` | Sonnet 4.6 | `Agent`, `model: "sonnet"` | Pattern-heavy work across many similar components, fast feedback loop. |
-| **Tests** (all domains) | Sonnet 4.6 | `Agent`, `model: "sonnet"` | Pattern-heavy and repetitive across backend and frontend alike. |
+| **Backend** — Go in `platform/`, `server/hocuspocus.ts` | Codex `gpt-5.6-terra` | `codex:codex-rescue` subagent | Go's conventions here are tight (Chi, store/handler split, parameterized SQL, `slog`, RFC3339). Codex follows them well from one brief. |
+| **Frontend** — Next.js App Router, React, `src/` | Sonnet 5 | `Agent`, `model: "sonnet"` | Pattern-heavy work across many similar components, fast feedback loop. |
+| **Tests** (all domains) | Opus 5 | `Agent`, `model: "opus"` | Tests are the correctness contract; the deeper model is worth it to catch the cases a pattern-matcher would rubber-stamp. |
 | **Cross-domain / new patterns / hard debugging** | Opus 5 | inline, or `Agent`, `model: "opus"` | The cross-cutting reasoning IS the value; splitting by domain would lose it. |
 | **Review** | see `docs/reviewers.md` | — | Reviewer slots are a separate roster from implementer slots. Don't conflate them. |
 
@@ -31,15 +31,21 @@ Agent tool with:
   subagent_type: "codex:codex-rescue"
   prompt: <complete brief>
 
-# Frontend / tests
+# Frontend
 Agent tool with:
   subagent_type: "general-purpose"
-  model: "sonnet"
+  model: "sonnet"          # Sonnet 5
+  prompt: <complete brief>
+
+# Tests (any domain)
+Agent tool with:
+  subagent_type: "general-purpose"
+  model: "opus"            # Opus 5 — tests are the correctness contract
   prompt: <complete brief>
 ```
 
 The `model` parameter overrides the subagent definition's default. Valid: `"sonnet"`, `"opus"`, `"haiku"`, `"fable"`.
-`codex:codex-rescue` uses its own model regardless.
+`codex:codex-rescue` uses its own model (set `gpt-5.6-terra` in `~/.codex/config.toml`) regardless of the `model` parameter.
 
 ## Brief checklist
 
