@@ -59,3 +59,9 @@ test-results/
 .claudecode-buddy/
 .coworker/
 .claude/
+
+# codex tooling state (per-session, machine-local)
+.codex-buddy/
+
+# vim undo files
+*.un~
