@@ -8,10 +8,14 @@
 // NEXTJS_PORT was set. Running through Bun's runtime applies .env before we
 // read the port, matching how server/hocuspocus.ts picks up HOCUSPOCUS_PORT.
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const port = process.env.NEXTJS_PORT ?? "3003";
-const nextBin = join(import.meta.dir, "..", "node_modules", ".bin", "next");
+// `import.meta.dir` is bun-only and not in TypeScript's ImportMeta, so it fails
+// `tsc --noEmit`. This form is standard ESM and type-checks everywhere.
+const here = dirname(fileURLToPath(import.meta.url));
+const nextBin = join(here, "..", "node_modules", ".bin", "next");
 
 const child = spawn(nextBin, ["dev", "-p", port], { stdio: "inherit" });
 
