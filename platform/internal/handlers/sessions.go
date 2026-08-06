@@ -37,15 +37,23 @@ type SessionHandler struct {
 	Broadcaster *events.Broadcaster
 }
 
+const maxConcurrentLiveSessionsPerHost = 5
+
 type sessionListResponse struct {
 	Items      []store.LiveSession `json:"items"`
 	NextCursor *string             `json:"nextCursor,omitempty"`
+}
+
+type publicSessionListResponse struct {
+	Items      []store.PublicSessionListItem `json:"items"`
+	NextCursor *string                       `json:"nextCursor,omitempty"`
 }
 
 func (h *SessionHandler) Routes(r chi.Router) {
 	r.Route("/api/sessions", func(r chi.Router) {
 		r.Get("/", h.ListSessions)
 		r.Post("/", h.CreateSession)
+		r.Get("/public", h.ListPublicSessions)
 		r.Get("/by-class/{classId}", h.ListByClass)
 		r.Get("/active/{classId}", h.GetActiveByClass)
 		r.Route("/{id}", func(r chi.Router) {
@@ -101,6 +109,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		Title                 string  `json:"title"`
 		ClassID               *string `json:"classId"`
 		Settings              string  `json:"settings"`
+		Visibility            string  `json:"visibility"`
 		ConfirmUnlinkedTopics bool    `json:"confirmUnlinkedTopics,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -110,25 +119,17 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title is required")
 		return
 	}
+	if !validSessionVisibility(body.Visibility, true) {
+		writeError(w, http.StatusBadRequest, "visibility must be unlisted or public")
+		return
+	}
 
 	// topicIDs is the agenda snapshot we'll plumb into Sessions.CreateSession.
 	// Empty for ad-hoc sessions; populated for class-bound sessions from the
 	// course's topics. Plan 048 phase 1.
 	var topicIDs []string
 
-	if body.ClassID == nil {
-		if !claims.IsPlatformAdmin {
-			ok, err := h.isTeacherOrOrgAdmin(r, claims.UserID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "Database error")
-				return
-			}
-			if !ok {
-				writeError(w, http.StatusForbidden, "Must be teacher or platform admin")
-				return
-			}
-		}
-	} else {
+	if body.ClassID != nil {
 		class, ok := h.authorizeSessionCreateForClass(w, r, *body.ClassID, claims)
 		if !ok {
 			return
@@ -172,14 +173,24 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	maxConcurrentLive := maxConcurrentLiveSessionsPerHost
+	if claims.IsPlatformAdmin {
+		maxConcurrentLive = 0
+	}
 	session, err := h.Sessions.CreateSession(r.Context(), store.CreateSessionInput{
-		ClassID:   body.ClassID,
-		TeacherID: claims.UserID,
-		Title:     body.Title,
-		Settings:  body.Settings,
-		TopicIDs:  topicIDs,
+		ClassID:           body.ClassID,
+		TeacherID:         claims.UserID,
+		Title:             body.Title,
+		Settings:          body.Settings,
+		Visibility:        body.Visibility,
+		MaxConcurrentLive: maxConcurrentLive,
+		TopicIDs:          topicIDs,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrConcurrentSessionLimit) {
+			writeError(w, http.StatusTooManyRequests, "Too many live ad-hoc sessions for this user")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
@@ -278,6 +289,43 @@ func parseSessionListFilterFromQuery(r *http.Request) (store.ListSessionsFilter,
 	return f, nil
 }
 
+func parsePublicSessionListQuery(r *http.Request) (int, *time.Time, *string, error) {
+	q := r.URL.Query()
+	limit := 20
+	if rawLimit := q.Get("limit"); rawLimit != "" {
+		n, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return 0, nil, nil, errors.New("limit must be an integer")
+		}
+		limit = n
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	var cursorStartedAt *time.Time
+	var cursorID *string
+	if cursor := q.Get("cursor"); cursor != "" {
+		startedAt, id, err := decodeCursor(cursor)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		cursorStartedAt = startedAt
+		cursorID = id
+	}
+	return limit, cursorStartedAt, cursorID, nil
+}
+
+func validSessionVisibility(visibility string, allowEmpty bool) bool {
+	if visibility == "" {
+		return allowEmpty
+	}
+	return visibility == "unlisted" || visibility == "public"
+}
+
 // ListSessions handles GET /api/sessions?teacherId=&classId=&status=&limit=&cursor=
 func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -314,6 +362,40 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, sessionListResponse{
 		Items:      sessions,
+		NextCursor: nextCursor,
+	})
+}
+
+// ListPublicSessions handles GET /api/sessions/public?limit=&cursor=
+func (h *SessionHandler) ListPublicSessions(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	limit, cursorStartedAt, cursorID, err := parsePublicSessionListQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid query: "+err.Error())
+		return
+	}
+
+	items, err := h.Sessions.ListPublicSessions(r.Context(), limit+1, cursorStartedAt, cursorID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	var nextCursor *string
+	if len(items) > limit {
+		items = items[:limit]
+		last := items[len(items)-1]
+		cursor := encodeCursor(last.StartedAt, last.ID)
+		nextCursor = &cursor
+	}
+
+	writeJSON(w, http.StatusOK, publicSessionListResponse{
+		Items:      items,
 		NextCursor: nextCursor,
 	})
 }
@@ -482,49 +564,25 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ended)
 }
 
-// canJoinSession reports whether the caller may join this session.
-//
-// Plan 043 Phase 1 P0: pre-043, JoinSession added any authenticated caller
-// as a participant. Now access requires one of:
-//
-//   - admin equivalence (IsPlatformAdmin || ImpersonatedBy != "")
-//   - Class membership in the session's owning class
-//   - A pre-existing session_participants row with status `invited` or
-//     `present` (pre-invited via AddParticipant or token). Status `left`
-//     does NOT grant re-entry — a kicked or left student must be re-invited
-//   - For class-less sessions, only the session teacher (or admin) may join
-//
-// Returns (0, "") if authorized, or an http status + message to write
-// otherwise. The same logic is reused by GetStudentPage so the page can
-// load before the join POST runs.
+// canJoinSession reports whether the caller may join, stream events for, or
+// raise/lower their hand in this session. Admin-equivalent callers bypass the
+// store gate; all other access decisions are delegated to CanAccessSession so
+// class-bound membership, class-less participant access, and ended-session
+// handling share one canonical policy.
 func (h *SessionHandler) canJoinSession(r *http.Request, session *store.LiveSession, claims *auth.Claims) (int, string) {
 	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
 		return 0, ""
 	}
 
-	if session.ClassID == nil {
-		if session.TeacherID == claims.UserID {
-			return 0, ""
-		}
-		return http.StatusForbidden, "Not authorized"
-	}
-
-	if h.Classes != nil {
-		members, err := h.Classes.ListClassMembers(r.Context(), *session.ClassID)
-		if err != nil {
-			return http.StatusInternalServerError, "Database error"
-		}
-		for _, m := range members {
-			if m.UserID == claims.UserID {
-				return 0, ""
-			}
-		}
-	}
-
-	if existing, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID); err != nil {
+	allowed, reason, err := h.Sessions.CanAccessSession(r.Context(), session.ID, claims.UserID)
+	if err != nil {
 		return http.StatusInternalServerError, "Database error"
-	} else if existing != nil && (existing.Status == "invited" || existing.Status == "present") {
+	}
+	if allowed {
 		return 0, ""
+	}
+	if reason == "ended" {
+		return http.StatusGone, "Session has ended"
 	}
 
 	return http.StatusForbidden, "Not authorized"
@@ -548,11 +606,6 @@ func (h *SessionHandler) JoinSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if session.Status != "live" {
-		writeError(w, http.StatusBadRequest, "Session has ended")
-		return
-	}
-
 	if status, msg := h.canJoinSession(r, session, claims); status != 0 {
 		writeError(w, status, msg)
 		return
@@ -833,7 +886,7 @@ func (h *SessionHandler) GetSessionTopics(w http.ResponseWriter, r *http.Request
 
 	// Plan 043 Phase 1 P0: gate by class membership. Resolve the class
 	// via the session, then defer to canAccessClass. Class-less sessions
-	// (rare) only the teacher or admin may inspect.
+	// allow teacher/admin-equivalent callers and invited/present participants.
 	session, err := h.Sessions.GetSession(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -855,8 +908,15 @@ func (h *SessionHandler) GetSessionTopics(w http.ResponseWriter, r *http.Request
 			}
 		}
 	} else if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" && session.TeacherID != claims.UserID {
-		writeError(w, http.StatusNotFound, "Not found")
-		return
+		participant, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if participant == nil || (participant.Status != "invited" && participant.Status != "present") {
+			writeError(w, http.StatusNotFound, "Not found")
+			return
+		}
 	}
 
 	topics, err := h.Sessions.GetSessionTopics(r.Context(), sessionID)
@@ -983,25 +1043,6 @@ func (h *SessionHandler) isInstructor(r *http.Request, classID, userID string) (
 	}
 	for _, m := range members {
 		if m.UserID == userID && m.Role == "instructor" {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (h *SessionHandler) isTeacherOrOrgAdmin(r *http.Request, userID string) (bool, error) {
-	if h.Orgs == nil {
-		return false, errors.New("org store unavailable")
-	}
-	memberships, err := h.Orgs.GetUserMemberships(r.Context(), userID)
-	if err != nil {
-		return false, err
-	}
-	for _, m := range memberships {
-		if m.Status != "active" || m.OrgStatus != "active" {
-			continue
-		}
-		if m.Role == "teacher" || m.Role == "org_admin" {
 			return true, nil
 		}
 	}
@@ -1231,7 +1272,8 @@ func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := chi.URLParam(r, "id")
-	if _, ok := h.isSessionOwner(w, r, sessionID, claims); !ok {
+	session, ok := h.isSessionOwner(w, r, sessionID, claims)
+	if !ok {
 		return
 	}
 
@@ -1239,15 +1281,28 @@ func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title           *string         `json:"title"`
 		Settings        *string         `json:"settings"`
+		Visibility      *string         `json:"visibility"`
 		InviteExpiresAt json.RawMessage `json:"inviteExpiresAt,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
+	if body.Visibility != nil && !validSessionVisibility(*body.Visibility, false) {
+		writeError(w, http.StatusBadRequest, "visibility must be unlisted or public")
+		return
+	}
+	// Public visibility is a class-less (ad-hoc) feature. Refuse to make a
+	// class-bound session public — otherwise it would surface in the global
+	// browse list and be joinable by any authenticated user across orgs.
+	if body.Visibility != nil && *body.Visibility == "public" && session.ClassID != nil {
+		writeError(w, http.StatusBadRequest, "only class-less sessions can be made public")
+		return
+	}
 
 	input := store.UpdateSessionInput{
-		Title:    body.Title,
-		Settings: body.Settings,
+		Title:      body.Title,
+		Settings:   body.Settings,
+		Visibility: body.Visibility,
 	}
 
 	// Parse inviteExpiresAt: present string → set, JSON null → clear, absent → leave unchanged.
@@ -1539,6 +1594,14 @@ func (h *SessionHandler) GetStudentPage(w http.ResponseWriter, r *http.Request) 
 		} else if existing != nil && (existing.Status == "invited" || existing.Status == "present") {
 			authorized = true
 		}
+	}
+	// Plan 090: a class-less public session is open-join. A first-time browser
+	// clicking "Join" has no participant row yet and is not a class member, so
+	// without this clause GetStudentPage 403s and the room dispatcher never
+	// reaches the /join POST. Mirror CanAccessSession's public clause exactly
+	// (live + public + class-less); the /join POST then records participation.
+	if !authorized && session.ClassID == nil && session.Visibility == "public" {
+		authorized = true
 	}
 	if !authorized {
 		writeError(w, http.StatusForbidden, "Not enrolled in this session's class")

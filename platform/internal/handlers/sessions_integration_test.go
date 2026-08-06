@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -41,6 +42,11 @@ type sessionListPayload struct {
 	NextCursor *string             `json:"nextCursor"`
 }
 
+type publicSessionListPayload struct {
+	Items      []store.PublicSessionListItem `json:"items"`
+	NextCursor *string                       `json:"nextCursor"`
+}
+
 func strPtr(s string) *string { return &s }
 
 func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
@@ -63,6 +69,7 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		Topics:      store.NewTopicStore(db),
 		Chapters:    store.NewChapterStore(db),
 		Orgs:        orgs,
+		ParentLinks: store.NewParentLinkStore(db),
 		Broadcaster: broadcaster,
 	}
 
@@ -89,6 +96,7 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN (SELECT id FROM sessions WHERE teacher_id = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM sessions WHERE teacher_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 		})
@@ -204,6 +212,125 @@ func TestSessionHandler_CreateSession_Orphan201(t *testing.T) {
 	assert.Equal(t, fx.teacher.ID, session.TeacherID)
 	assert.Equal(t, "Office hours", session.Title)
 	assert.Nil(t, session.ClassID)
+	assert.Equal(t, "unlisted", session.Visibility)
+}
+
+func TestSessionHandler_CreateSession_PublicVisibility201(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title":      "Public office hours",
+		"visibility": "public",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
+	assert.Equal(t, "public", session.Visibility)
+}
+
+func TestSessionHandler_CreateSession_InvalidVisibility400(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title":      "Bad visibility",
+		"visibility": "private",
+	}, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_CreateSession_OrphanPlainRegisteredUser201(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Plain user office hours",
+	}, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
+	assert.Equal(t, fx.otherUser.ID, session.TeacherID)
+	assert.Nil(t, session.ClassID)
+}
+
+func TestSessionHandler_CreateSession_OrphanStudentOnlyUser201(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	_, err := fx.orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: fx.orgID, UserID: fx.student.ID, Role: "student", Status: "active",
+	})
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Student study session",
+	}, fx.claims(fx.student, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
+	assert.Equal(t, fx.student.ID, session.TeacherID)
+	assert.Nil(t, session.ClassID)
+}
+
+func TestSessionHandler_CreateSession_OrphanConcurrentLiveCap429(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 5; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title": "Ad-hoc capped " + strconv.Itoa(i+1),
+		}, fx.claims(fx.otherUser, false))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Ad-hoc capped 6",
+	}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_CreateSession_PlatformAdminExemptFromOrphanConcurrentLiveCap(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 6; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title": "Admin ad-hoc " + strconv.Itoa(i+1),
+		}, fx.claims(fx.otherUser, true))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+}
+
+func TestSessionHandler_CreateSession_ConcurrentLiveCapIgnoresClassBoundSessions(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 5; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title":   "Class-bound " + strconv.Itoa(i+1),
+			"classId": fx.classID,
+		}, fx.claims(fx.teacher, false))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+
+	for i := 0; i < 5; i++ {
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+			"title": "Ad-hoc after class-bound " + strconv.Itoa(i+1),
+		}, fx.claims(fx.teacher, false))
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Ad-hoc after class-bound 6",
+	}, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusTooManyRequests, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_CreateSession_ClassBoundNonMember403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title":   "Forbidden class-bound",
+		"classId": fx.classID,
+	}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
 }
 
 func TestSessionHandler_GetSession_OrphanAccessibleByCreator(t *testing.T) {
@@ -294,6 +421,243 @@ func TestSessionHandler_ListSessions_ClassFilterOnlyReturnsClassLinkedSessions(t
 	}
 }
 
+// ------------------- GET /api/sessions/public -------------------
+
+func TestSessionHandler_ListPublicSessions_OnlyLivePublicAndStaticRoute(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	publicSession := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Public live",
+		Visibility: "public",
+	})
+	unlistedSession := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Unlisted live",
+		Visibility: "unlisted",
+	})
+	endedPublic := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Public ended",
+		Visibility: "public",
+	})
+	_, err := fx.h.Sessions.EndSession(ctx, endedPublic.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var payload publicSessionListPayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	gotIDs := make([]string, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	assert.Contains(t, gotIDs, publicSession.ID)
+	assert.NotContains(t, gotIDs, unlistedSession.ID)
+	assert.NotContains(t, gotIDs, endedPublic.ID)
+}
+
+func TestSessionHandler_ListPublicSessions_PaginatesWithDisjointPages(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	for i := 0; i < 3; i++ {
+		fx.createSession(t, store.CreateSessionInput{
+			TeacherID:  fx.teacher.ID,
+			Title:      "Public page " + strconv.Itoa(i+1),
+			Visibility: "public",
+		})
+		time.Sleep(time.Millisecond)
+	}
+
+	first := fx.doRequest(t, http.MethodGet, "/api/sessions/public?limit=2", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, first.Code, "body=%s", first.Body.String())
+	var firstPayload publicSessionListPayload
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &firstPayload))
+	require.Len(t, firstPayload.Items, 2)
+	require.NotNil(t, firstPayload.NextCursor)
+
+	second := fx.doRequest(t, http.MethodGet, "/api/sessions/public?limit=2&cursor="+*firstPayload.NextCursor, nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, second.Code, "body=%s", second.Body.String())
+	var secondPayload publicSessionListPayload
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &secondPayload))
+	require.NotEmpty(t, secondPayload.Items)
+
+	firstIDs := map[string]bool{}
+	for _, item := range firstPayload.Items {
+		firstIDs[item.ID] = true
+	}
+	for _, item := range secondPayload.Items {
+		assert.False(t, firstIDs[item.ID], "session %s appeared on both pages", item.ID)
+	}
+}
+
+// ------------------- Phase 2 class-less access consistency -------------------
+
+func TestSessionHandler_JoinSession_OrphanInvitedParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc invited join",
+	})
+	_, err := fx.h.Sessions.AddParticipant(ctx, session.ID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	participant, err := fx.h.Sessions.GetSessionParticipant(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, participant)
+	assert.Equal(t, "present", participant.Status)
+}
+
+func TestSessionHandler_JoinSession_OrphanPresentParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc present join",
+	})
+	_, err := fx.h.Sessions.JoinSession(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_JoinSession_OrphanLeftParticipantDenied(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc left join",
+	})
+	_, err := fx.h.Sessions.JoinSession(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.LeaveSession(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_GetSessionTopics_OrphanParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc topics participant",
+	})
+	_, err := fx.h.Sessions.AddParticipant(ctx, session.ID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/topics", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var topics []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &topics))
+}
+
+func TestSessionHandler_GetSessionTopics_OrphanRandomUserDenied(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc topics outsider",
+	})
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/topics", nil, fx.claims(fx.otherUser, false))
+	assert.Contains(t, []int{http.StatusNotFound, http.StatusForbidden}, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_JoinSession_OrphanEndedSessionGone(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc ended join",
+	})
+	_, err := fx.h.Sessions.AddParticipant(ctx, session.ID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.EndSession(ctx, session.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusGone, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_JoinSession_ClassBoundBehaviorUnchanged(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	_, err := fx.classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: fx.classID,
+		UserID:  fx.student.ID,
+		Role:    "student",
+	})
+	require.NoError(t, err)
+
+	member := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/join", nil, fx.claims(fx.student, false))
+	assert.Equal(t, http.StatusOK, member.Code, "body=%s", member.Body.String())
+
+	outsider := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, outsider.Code, "body=%s", outsider.Body.String())
+}
+
+func TestSessionHandler_JoinSession_PublicOpenJoinCreatesParticipantIdempotently(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Public open join",
+		Visibility: "public",
+	})
+
+	first := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, first.Code, "body=%s", first.Body.String())
+
+	participant, err := fx.h.Sessions.GetSessionParticipant(ctx, session.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, participant)
+	assert.Equal(t, "present", participant.Status)
+
+	second := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, second.Code, "body=%s", second.Body.String())
+
+	var count int
+	err = fx.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+		session.ID, fx.otherUser.ID,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestSessionHandler_JoinSession_UnlistedRandomUserDenied(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Unlisted closed join",
+		Visibility: "unlisted",
+	})
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+session.ID+"/join", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_GetSessionTopics_ClassBoundParentOfParticipantAllowed(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	_, err := fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	_, err = fx.h.ParentLinks.CreateLink(ctx, fx.otherUser.ID, fx.student.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+}
+
 // ------------------- PATCH /api/sessions/{id} -------------------
 
 func TestSessionHandler_PatchSession_TeacherUpdatesTitle(t *testing.T) {
@@ -330,6 +694,49 @@ func TestSessionHandler_PatchSession_TeacherUpdatesInviteExpiry(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
 	require.NotNil(t, session.InviteExpiresAt)
 	assert.WithinDuration(t, future, *session.InviteExpiresAt, time.Second)
+}
+
+func TestSessionHandler_PatchSession_HostUpdatesVisibility(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	// Visibility toggling to public is a class-LESS (ad-hoc) feature only; the
+	// cross-org leak fix rejects public on a class-bound session (see
+	// TestSessionHandler_PatchSession_ClassBoundCannotBePublic400). Exercise the
+	// happy path on a class-less session the host owns.
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Ad-hoc visibility toggle",
+	})
+
+	toPublic := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+session.ID, map[string]any{
+		"visibility": "public",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, toPublic.Code, "body=%s", toPublic.Body.String())
+	var publicSession store.LiveSession
+	require.NoError(t, json.Unmarshal(toPublic.Body.Bytes(), &publicSession))
+	assert.Equal(t, "public", publicSession.Visibility)
+
+	toUnlisted := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+session.ID, map[string]any{
+		"visibility": "unlisted",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, toUnlisted.Code, "body=%s", toUnlisted.Body.String())
+	var unlistedSession store.LiveSession
+	require.NoError(t, json.Unmarshal(toUnlisted.Body.Bytes(), &unlistedSession))
+	assert.Equal(t, "unlisted", unlistedSession.Visibility)
+}
+
+func TestSessionHandler_PatchSession_NonHostCannotUpdateVisibility(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"visibility": "public"}
+	w := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+fx.sessionID, body, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestSessionHandler_PatchSession_InvalidVisibility400(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"visibility": "private"}
+	w := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+fx.sessionID, body, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 }
 
 func TestSessionHandler_PatchSession_NonTeacher403(t *testing.T) {
@@ -733,4 +1140,136 @@ func TestSessionHandler_GetParticipants_AccessPlatformAdmin(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/participants", nil, fx.claims(fx.otherUser, true))
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// ------------------- GET /api/sessions/{id}/student-page (plan 090 public admission) -------------------
+
+// Headline plan-090 regression guard: a class-less, live, public session must
+// admit a first-time browser — not the host, not a class member, no participant
+// row — so the room dispatcher can reach the /join POST. Before the public-
+// admission clause in GetStudentPage this returned 403 and browse->join 404'd.
+// This test would FAIL without that clause.
+func TestSessionHandler_GetStudentPage_ClassLessPublicNonParticipant200(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Public open room",
+		Visibility: "public",
+	})
+
+	// otherUser is not the host, not a class member, and has no participant row.
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/student-page", nil, fx.claims(fx.otherUser, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var payload studentPagePayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	assert.Equal(t, session.ID, payload.Session.ID)
+	assert.Nil(t, payload.ClassID)
+	assert.Equal(t, "/student", payload.ReturnPath)
+}
+
+// The public-admission clause is visibility-gated, not merely class-gated: an
+// UNLISTED class-less session must still 403 a non-participant. Without the
+// visibility check the clause would open every ad-hoc session to any
+// authenticated user.
+func TestSessionHandler_GetStudentPage_ClassLessUnlistedNonParticipant403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	session := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Unlisted closed room",
+		Visibility: "unlisted",
+	})
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+session.ID+"/student-page", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+// ------------------- PATCH visibility guard (cross-org leak fix) -------------------
+
+// A class-bound session must never be made public: that would surface it in the
+// global browse list and let any authenticated user across orgs join it. The
+// PatchSession guard returns 400 and leaves visibility unchanged.
+func TestSessionHandler_PatchSession_ClassBoundCannotBePublic400(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	// fx.sessionID is the fixture's class-bound session.
+	w := fx.doRequest(t, http.MethodPatch, "/api/sessions/"+fx.sessionID, map[string]any{
+		"visibility": "public",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+
+	// The session must remain non-public — the guard runs before UpdateSession.
+	got := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, got.Code, "body=%s", got.Body.String())
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(got.Body.Bytes(), &session))
+	assert.Equal(t, "unlisted", session.Visibility, "class-bound session must not have been made public")
+}
+
+// ------------------- CanAccessSession / ListPublicSessions store-level guards -------------------
+
+// Direct store test for the cross-org leak fix: a class-bound session that
+// carries visibility='public' (constructed at the store layer, bypassing the
+// PatchSession guard) must NOT grant "public" access to a non-member. Only class
+// membership opens a class-bound session.
+func TestSessionStore_CanAccessSession_ClassBoundPublicDeniesNonMember(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	classBoundPublic := fx.createSession(t, store.CreateSessionInput{
+		ClassID:    strPtr(fx.classID),
+		TeacherID:  fx.teacher.ID,
+		Title:      "Class-bound but public",
+		Visibility: "public",
+	})
+
+	allowed, reason, err := fx.h.Sessions.CanAccessSession(ctx, classBoundPublic.ID, fx.otherUser.ID)
+	require.NoError(t, err)
+	assert.False(t, allowed, "class-bound public session must not admit a non-member via the public clause")
+	assert.Equal(t, "no_access", reason)
+}
+
+// ListPublicSessions must exclude class-bound sessions even when one carries
+// visibility='public' (constructed at the store layer). Defense in depth: the
+// PatchSession guard stops the API from ever setting this, but the browse query
+// must independently refuse to surface it.
+func TestSessionStore_ListPublicSessions_ExcludesClassBound(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	classBoundPublic := fx.createSession(t, store.CreateSessionInput{
+		ClassID:    strPtr(fx.classID),
+		TeacherID:  fx.teacher.ID,
+		Title:      "Class-bound public (leaky)",
+		Visibility: "public",
+	})
+	classLessPublic := fx.createSession(t, store.CreateSessionInput{
+		TeacherID:  fx.teacher.ID,
+		Title:      "Class-less public (browseable)",
+		Visibility: "public",
+	})
+
+	items, err := fx.h.Sessions.ListPublicSessions(ctx, 100, nil, nil)
+	require.NoError(t, err)
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	assert.Contains(t, gotIDs, classLessPublic.ID, "class-less public session should be browseable")
+	assert.NotContains(t, gotIDs, classBoundPublic.ID, "class-bound session must never surface in the public browse list")
+}
+
+// ------------------- GET /api/sessions/public (browse endpoint guards) -------------------
+
+func TestSessionHandler_ListPublicSessions_Unauthenticated401(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public", nil, nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+}
+
+func TestSessionHandler_ListPublicSessions_MalformedCursor400(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// %40%40%40 decodes to "@@@", which is not valid base64url -> decodeCursor
+	// errors -> handler maps to 400.
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public?cursor=%40%40%40", nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 }

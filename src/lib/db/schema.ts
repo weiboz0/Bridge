@@ -64,6 +64,11 @@ export const sessionStatusEnum = pgEnum("session_status", [
   "ended",
 ]);
 
+export const sessionVisibilityEnum = pgEnum("session_visibility", [
+  "unlisted",
+  "public",
+]);
+
 // schedule_status mirrors the `schedule_status` ENUM created in
 // drizzle/0023_create_scheduled_sessions.sql. Live values:
 // planned | in_progress | completed | cancelled.
@@ -240,6 +245,7 @@ export const sessions = pgTable(
       { onDelete: "set null" },
     ),
     status: sessionStatusEnum("status").notNull().default("live"),
+    visibility: sessionVisibilityEnum("visibility").notNull().default("unlisted"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
@@ -309,6 +315,7 @@ export const sessionParticipants = pgTable(
       table.userId
     ),
     index("session_participants_session_idx").on(table.sessionId),
+    index("session_participants_session_status_idx").on(table.sessionId, table.status),
   ]
 );
 

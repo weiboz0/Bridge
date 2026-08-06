@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,54 @@ func TestGetRoles_Authenticated(t *testing.T) {
 	// Will fail on h.Orgs.GetUserMemberships since Orgs is nil
 	defer func() { recover() }()
 	h.GetRoles(w, req)
+}
+
+func TestGetPortalAccess_NoClaims(t *testing.T) {
+	h := &MeHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/portal-access", nil)
+	w := httptest.NewRecorder()
+	h.GetPortalAccess(w, req)
+
+	// Unauthenticated callers get 200 with both flags false (landing-page shape,
+	// plan 090): authenticated distinguishes "no session" from "session, no roles".
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, false, body["authorized"])
+	assert.Equal(t, false, body["authenticated"])
+}
+
+// GetPortalAccess must distinguish "no session" from "valid session, zero
+// roles": an authenticated user with no org memberships and no platform-admin
+// flag reads authenticated=true, authorized=false. This backs the plan-090
+// role-neutral shell, which admits on `authenticated` so a zero-role user can
+// reach /sessions. Needs a real OrgStore (Orgs is a concrete *store.OrgStore,
+// so no stub is possible without changing non-test code) — DATABASE_URL gated.
+func TestGetPortalAccess_ZeroRoleAuthenticated(t *testing.T) {
+	db := integrationDB(t)
+	ctx := context.Background()
+
+	users := store.NewUserStore(db)
+	u, err := users.RegisterUser(ctx, store.RegisterInput{
+		Name: "Zero Role", Email: "zero-role-portal@example.com", Password: "testpassword123",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
+		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+	})
+
+	h := &MeHandler{Orgs: store.NewOrgStore(db)}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/portal-access", nil)
+	req = withClaims(req, &auth.Claims{UserID: u.ID, Email: u.Email, Name: u.Name})
+	w := httptest.NewRecorder()
+	h.GetPortalAccess(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, true, body["authenticated"], "a valid session must read as authenticated")
+	assert.Equal(t, false, body["authorized"], "a user with zero roles must not be authorized")
 }
 
 func TestGetIdentity_NoClaims(t *testing.T) {

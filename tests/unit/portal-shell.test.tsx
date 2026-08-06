@@ -1,4 +1,21 @@
 // @vitest-environment jsdom
+//
+// Plan 090 phase 4 — role-neutral admission.
+//
+// PortalAccessResponse now carries `authenticated` alongside `authorized`:
+//   - authenticated: true whenever the caller holds a valid session, regardless of roles.
+//   - authorized:    true only when the caller holds >=1 portal role (pre-existing meaning).
+//
+// Gate rules exercised (see src/components/portal/portal-shell.tsx):
+//   1. Any caller with authenticated=false is bounced to /login, unconditionally
+//      (covers both the 401-exception path and the in-body `authenticated: false` path).
+//   2. Role-neutral shell (portalRole === null): admits ANY authenticated user,
+//      including a zero-role (`authorized: false`) one. Never redirects an
+//      authenticated caller.
+//   3. Role-specific shell (portalRole === "<role>"):
+//        - authorized=false (roleless) -> /login
+//        - authorized=true but lacking the target role -> /
+//        - authorized=true and holding the target role -> admitted
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -53,19 +70,32 @@ const mockRedirect = vi.mocked(redirect);
 
 const ADMIN_RESPONSE = {
   authorized: true,
+  authenticated: true,
   userName: "Admin User",
   roles: [{ role: "admin" }],
 };
 
 const TEACHER_RESPONSE = {
   authorized: true,
+  authenticated: true,
   userName: "Teacher User",
   roles: [{ role: "teacher", orgId: "org-1", orgName: "School A" }],
 };
 
-const NO_ROLES_RESPONSE = {
-  authorized: true,
-  userName: "No-Role User",
+// Authenticated (has a valid session) but holds zero portal roles.
+const AUTHENTICATED_ROLELESS_RESPONSE = {
+  authorized: false,
+  authenticated: true,
+  userName: "New User",
+  roles: [],
+};
+
+// Not authenticated at all — the in-body defense-in-depth path (middleware
+// normally intercepts this before PortalShell ever renders).
+const UNAUTHENTICATED_RESPONSE = {
+  authorized: false,
+  authenticated: false,
+  userName: "",
   roles: [],
 };
 
@@ -75,10 +105,55 @@ beforeEach(() => {
 });
 
 // -------------------------------------------------------------------------
-// Role-specific gate (pre-existing behaviour)
+// Role-neutral gate (portalRole === null) — plan 090 phase 4
 // -------------------------------------------------------------------------
 
-describe("PortalShell — role-specific gate", () => {
+describe("PortalShell — role-neutral gate (portalRole=null)", () => {
+  it("admits an authenticated user with zero roles — no redirect", async () => {
+    mockApi.mockResolvedValue(AUTHENTICATED_ROLELESS_RESPONSE);
+    const result = await PortalShell({
+      portalRole: null,
+      children: <p>neutral content</p>,
+    });
+    render(result as React.ReactElement);
+    expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+    expect(screen.getByText("neutral content")).toBeInTheDocument();
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it("admits an authenticated user holding a role — no redirect", async () => {
+    mockApi.mockResolvedValue(TEACHER_RESPONSE);
+    const result = await PortalShell({
+      portalRole: null,
+      children: <p>teacher content</p>,
+    });
+    render(result as React.ReactElement);
+    expect(screen.getByText("teacher content")).toBeInTheDocument();
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it("redirects to /login when unauthenticated (authenticated=false in body)", async () => {
+    mockApi.mockResolvedValue(UNAUTHENTICATED_RESPONSE);
+    await expect(
+      PortalShell({ portalRole: null, children: <p>neutral content</p> })
+    ).rejects.toThrow("NEXT_REDIRECT: /login");
+    expect(mockRedirect).toHaveBeenCalledWith("/login");
+  });
+
+  it("redirects to /login on 401 (session missing entirely)", async () => {
+    mockApi.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    await expect(
+      PortalShell({ portalRole: null, children: <p>neutral content</p> })
+    ).rejects.toThrow("NEXT_REDIRECT: /login");
+    expect(mockRedirect).toHaveBeenCalledWith("/login");
+  });
+});
+
+// -------------------------------------------------------------------------
+// Role-specific gate (portalRole = "<role>") — behaviour preserved exactly
+// -------------------------------------------------------------------------
+
+describe("PortalShell — role-specific gate (portalRole set)", () => {
   it("renders children and sidebar when user holds the required role", async () => {
     mockApi.mockResolvedValue(ADMIN_RESPONSE);
     const result = await PortalShell({
@@ -88,9 +163,10 @@ describe("PortalShell — role-specific gate", () => {
     render(result as React.ReactElement);
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
     expect(screen.getByText("admin content")).toBeInTheDocument();
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 
-  it("redirects to / when user lacks the required role", async () => {
+  it("redirects to / when user is authorized but lacks the required role", async () => {
     mockApi.mockResolvedValue(TEACHER_RESPONSE);
     await expect(
       PortalShell({ portalRole: "admin", children: <p>admin content</p> })
@@ -98,71 +174,26 @@ describe("PortalShell — role-specific gate", () => {
     expect(mockRedirect).toHaveBeenCalledWith("/");
   });
 
+  it("redirects to /login when the user is authenticated but roleless", async () => {
+    mockApi.mockResolvedValue(AUTHENTICATED_ROLELESS_RESPONSE);
+    await expect(
+      PortalShell({ portalRole: "admin", children: <p>admin content</p> })
+    ).rejects.toThrow("NEXT_REDIRECT: /login");
+    expect(mockRedirect).toHaveBeenCalledWith("/login");
+  });
+
+  it("redirects to /login when not authenticated at all", async () => {
+    mockApi.mockResolvedValue(UNAUTHENTICATED_RESPONSE);
+    await expect(
+      PortalShell({ portalRole: "admin", children: <p>admin content</p> })
+    ).rejects.toThrow("NEXT_REDIRECT: /login");
+    expect(mockRedirect).toHaveBeenCalledWith("/login");
+  });
+
   it("redirects to /login on 401", async () => {
     mockApi.mockRejectedValue(new ApiError(401, "Unauthorized"));
     await expect(
       PortalShell({ portalRole: "admin", children: <p>content</p> })
-    ).rejects.toThrow("NEXT_REDIRECT: /login");
-    expect(mockRedirect).toHaveBeenCalledWith("/login");
-  });
-
-  it("redirects to /login when authorized=false", async () => {
-    mockApi.mockResolvedValue({ authorized: false, userName: "", roles: [] });
-    await expect(
-      PortalShell({ portalRole: "admin", children: <p>content</p> })
-    ).rejects.toThrow("NEXT_REDIRECT: /login");
-    expect(mockRedirect).toHaveBeenCalledWith("/login");
-  });
-});
-
-// -------------------------------------------------------------------------
-// Null-role gate (plan 089 phase 1 — Decision #13)
-// -------------------------------------------------------------------------
-
-describe("PortalShell — null-role gate (role-neutral /library shell)", () => {
-  it("renders children and sidebar when user has ≥1 role", async () => {
-    mockApi.mockResolvedValue(ADMIN_RESPONSE);
-    const result = await PortalShell({
-      portalRole: null,
-      children: <p>library content</p>,
-    });
-    render(result as React.ReactElement);
-    expect(screen.getByTestId("sidebar")).toBeInTheDocument();
-    expect(screen.getByText("library content")).toBeInTheDocument();
-    expect(mockRedirect).not.toHaveBeenCalled();
-  });
-
-  it("renders for any role, not just admin", async () => {
-    mockApi.mockResolvedValue(TEACHER_RESPONSE);
-    const result = await PortalShell({
-      portalRole: null,
-      children: <p>teacher library</p>,
-    });
-    render(result as React.ReactElement);
-    expect(screen.getByText("teacher library")).toBeInTheDocument();
-    expect(mockRedirect).not.toHaveBeenCalled();
-  });
-
-  it("redirects to / when user has 0 roles", async () => {
-    mockApi.mockResolvedValue(NO_ROLES_RESPONSE);
-    await expect(
-      PortalShell({ portalRole: null, children: <p>library content</p> })
-    ).rejects.toThrow("NEXT_REDIRECT: /");
-    expect(mockRedirect).toHaveBeenCalledWith("/");
-  });
-
-  it("redirects to /login when unauthenticated (401)", async () => {
-    mockApi.mockRejectedValue(new ApiError(401, "Unauthorized"));
-    await expect(
-      PortalShell({ portalRole: null, children: <p>library content</p> })
-    ).rejects.toThrow("NEXT_REDIRECT: /login");
-    expect(mockRedirect).toHaveBeenCalledWith("/login");
-  });
-
-  it("redirects to /login when authorized=false", async () => {
-    mockApi.mockResolvedValue({ authorized: false, userName: "", roles: [] });
-    await expect(
-      PortalShell({ portalRole: null, children: <p>library content</p> })
     ).rejects.toThrow("NEXT_REDIRECT: /login");
     expect(mockRedirect).toHaveBeenCalledWith("/login");
   });

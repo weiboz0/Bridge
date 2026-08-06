@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
+
+type SessionVisibility = "unlisted" | "public";
 
 interface TeacherHeaderProps {
   sessionId: string;
@@ -26,6 +29,7 @@ export function TeacherHeader({
   leftVisible,
   rightVisible,
 }: TeacherHeaderProps) {
+  const { data: session } = useSession();
   const [elapsed, setElapsed] = useState(0);
   const [ending, setEnding] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -35,10 +39,55 @@ export function TeacherHeader({
   const [rotating, setRotating] = useState(false);
   const [revoking, setRevoking] = useState(false);
 
+  // Plan 090 phase 5: visibility toggle, host-only. TeacherHeader is also
+  // mounted for a class-bound session's instructor/TA (GetTeacherPage
+  // authorizes them too, not just the literal host) — PATCH /api/sessions/{id}
+  // is host/admin-only on the backend, so the control must only render for
+  // the actual host. Self-contained fetch (rather than a new prop) keeps
+  // this local to the header and correct on every route that mounts it.
+  const [isHost, setIsHost] = useState(false);
+  const [visibility, setVisibility] = useState<SessionVisibility | null>(null);
+  const [visibilityUpdating, setVisibilityUpdating] = useState(false);
+
   useEffect(() => {
     const interval = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSession() {
+      const res = await fetch(`/api/sessions/${sessionId}`);
+      if (!res.ok || cancelled) return;
+      const data = await res.json();
+      if (cancelled) return;
+      setVisibility(data.visibility === "public" ? "public" : "unlisted");
+      const userId = session?.user?.id;
+      setIsHost(Boolean(userId) && (data.teacherId === userId || Boolean(session?.user?.isPlatformAdmin)));
+    }
+    void loadSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, session?.user?.id, session?.user?.isPlatformAdmin]);
+
+  const toggleVisibility = useCallback(async () => {
+    if (!visibility) return;
+    const next: SessionVisibility = visibility === "public" ? "unlisted" : "public";
+    setVisibilityUpdating(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visibility: next }),
+      });
+      if (res.ok) {
+        setVisibility(next);
+      }
+    } finally {
+      setVisibilityUpdating(false);
+    }
+  }, [sessionId, visibility]);
 
   const minutes = Math.floor(elapsed / 60);
   const seconds = elapsed % 60;
@@ -102,6 +151,22 @@ export function TeacherHeader({
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {isHost && visibility && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleVisibility}
+              disabled={visibilityUpdating}
+              title="Toggle whether this session is listed on the public /sessions directory"
+              data-testid="visibility-toggle"
+            >
+              {visibilityUpdating
+                ? "Updating..."
+                : visibility === "public"
+                  ? "Public"
+                  : "List publicly"}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"

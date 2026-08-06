@@ -136,11 +136,17 @@ func (h *MeHandler) GetRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetPortalAccess handles GET /api/me/portal-access
-// Returns: { authorized, userName, roles[], currentRole }
+// Returns: { authorized, authenticated, userName, roles[], currentRole }
+//
+// `authenticated` is true whenever the caller holds a valid session, regardless
+// of roles. `authorized` stays role-gated (len(roles) > 0) so existing consumers
+// that use it as a belong-here gate (the role-specific portal shells, the library
+// pages) are unaffected. The role-neutral shell (plan 090) admits on
+// `authenticated` so a zero-role user can reach /sessions.
 func (h *MeHandler) GetPortalAccess(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"authorized": false})
+		writeJSON(w, http.StatusOK, map[string]any{"authorized": false, "authenticated": false})
 		return
 	}
 
@@ -159,10 +165,11 @@ func (h *MeHandler) GetPortalAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"authorized":  len(roles) > 0,
-		"userName":    claims.Name,
-		"roles":       roles,
-		"currentRole": currentRole,
+		"authorized":    len(roles) > 0,
+		"authenticated": true,
+		"userName":      claims.Name,
+		"roles":         roles,
+		"currentRole":   currentRole,
 	})
 }
 

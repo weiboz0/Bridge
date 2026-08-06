@@ -28,9 +28,9 @@ The repo-root `CLAUDE.md` is a thin pointer that `@`-imports this file — **edi
 - **Hard safeguards — always pause, regardless of mode.** See `## Hard safeguards` below. These are not advisory.
 
 - **Delegate coding work by DOMAIN, not by complexity.**
-  Backend (Go in `platform/`, `server/hocuspocus.ts`) → Codex.
-  Frontend (`src/`) → Sonnet 4.6.
-  All tests → Sonnet 4.6.
+  Backend (Go in `platform/`, `server/hocuspocus.ts`) → Codex `gpt-5.6-terra`.
+  Frontend (`src/`) → Sonnet 5.
+  All tests → Opus 5.
   Cross-cutting refactors, new patterns, and hard multi-system debugging stay inline on the orchestrator.
   Dispatch table: `docs/coding-agent.md`.
 
@@ -158,7 +158,7 @@ Read it before changes touching those areas; update it when a plan introduces a 
 
 Full tier descriptions, commands, and gating env vars: `docs/testing.md`.
 
-- Test code goes to Sonnet by default — see `docs/coding-agent.md`.
+- Test code goes to Opus 5 by default — see `docs/coding-agent.md`.
 - Write or update tests for every code change. Cover happy, error, and edge paths.
 - **Every new Go API endpoint needs an integration test** — happy path, auth check, error cases, cross-user isolation.
 - **Every feature plan needs a named integration-tests phase.**
