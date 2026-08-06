@@ -201,4 +201,29 @@ _Re-confirmation of the flagging reviewers (Codex, Opus) against the fixes: pend
 
 ## Post-Execution Report
 
-_(Filled before shipping.)_
+All six phases implemented across two sessions (Phases 1–3 prior; 4–6 + review this session).
+
+### What shipped
+- **Phase 4** — role-neutral portal admission via a new `authenticated` field (not by flipping `authorized`, which has three login-gate consumers). Auth-surface contract change, done inline.
+- **Phase 5** — `/sessions` neutral routes (browse, room dispatcher), class-less redirect branching, host-only visibility toggle, nav. Built by Sonnet.
+- **Phase 6** — docs (`api.md`, `README.md`), full-suite verify, an E2E spec (unrun against a live stack).
+
+### Code-review gate — the material event
+The 4-way Tier-A gate caught **two blockers**, one of them a **cross-org data leak** (a host could publish a class-bound session to the global browse list, joinable by any user in any org). Codex and independent Opus found the browse→join blocker *independently* — the strongest signal the gate produces. Both fixed with tests that fail without the fix; full findings + resolutions in `## Code Review`. The gate paid for itself here: neither blocker was visible in self-review, and the existing tests actively *canonized* one of them.
+
+### Deviations
+- Phase 4 added a new field instead of flipping `authorized` (blast-radius avoidance; user-approved fork).
+- Phase 4 backend kept inline (coupled auth contract), not dispatched to Codex.
+- A standalone governance commit (`e3ffa98`, model-role dispatch update) rides this branch by user direction — it does not belong to plan 090 and can be cherry-picked out.
+
+### Known limitations / follow-ups
+1. **Host-remove does not stick on public sessions** — kicked user rejoins. Needs a follow-up plan (banned state) before host-remove is advertised for public sessions. Do not claim it as a mitigation in the PR.
+2. **E2E never executed against a live stack** — spec is correct-by-inspection and collectable only. Bridge E2E needs all three services + a pinned `E2E_BASE_URL`.
+3. **Ended class-less session now 410s teacher SSE/help** — intentional (read-only), but a behavior change worth watching.
+4. Malformed-but-decodable cursor → 500 not 400 (low-impact NIT, deferred).
+
+### Verification
+vitest 768/768 (95 files); `go test ./internal/handlers ./internal/store` green; `tsc` clean; lint ratchet clean; 8 new security tests pass and fail without their fixes. Integration harness reads `DATABASE_URL` (must end in `_test`), not `TEST_DATABASE_URL`.
+
+### Not done
+Reviewer re-confirmation of the fixes (optional — fixes are test-proven). Merge pending user decision, given the cross-org-leak finding and the unrun E2E.
